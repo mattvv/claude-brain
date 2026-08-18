@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -x -S warning setup.sh droplet/install.sh droplet/bin/brain \
+            droplet/bin/brain-ask droplet/bin/brain-proxy-build droplet/lib/common.sh
+      - name: cloud-init schema
+        run: |
+          sudo apt-get install -y cloud-init
+          cloud-init schema --config-file cloud-init.yaml
+      - name: patch checksum matches PIN
+        run: |
+          pinned=$(sed -n 's/^PATCH_SHA256=//p' droplet/proxy/PIN)
+          actual=$(sha256sum droplet/proxy/patches/cliproxyapi-claude-effort.patch | cut -d' ' -f1)
+          test "$pinned" = "$actual"

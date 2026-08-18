@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Build the pinned, patched CLIProxyAPI binary for claude-brain.
+# Idempotent: skips when the binary already exists for the pinned commit.
+# Usage: brain-proxy-build [--force]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+
+need git go
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+  || die "missing required command: sha256sum (or shasum)"
+
+COMMIT="$(pin_get COMMIT)"
+PATCH_SHA256="$(pin_get PATCH_SHA256)"
+[ -n "$COMMIT" ] || die "COMMIT missing from PIN"
+[ -n "$PATCH_SHA256" ] || die "PATCH_SHA256 missing from PIN"
+
+STAMP_FILE="$BRAIN_DATA_DIR/proxy/bin/.built-commit"
+if [ "$FORCE" -eq 0 ] && [ -x "$BRAIN_PROXY_BIN" ] && [ -f "$STAMP_FILE" ] \
+  && [ "$(cat "$STAMP_FILE")" = "$COMMIT" ]; then
+  ok "proxy already built for $COMMIT ($BRAIN_PROXY_BIN)"
+  exit 0
+fi
+
+# Verify the vendored patch before touching anything.
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$BRAIN_PATCH_FILE" | cut -d' ' -f1)"
+else
+  actual="$(shasum -a 256 "$BRAIN_PATCH_FILE" | cut -d' ' -f1)"
+fi
+[ "$actual" = "$PATCH_SHA256" ] || die "patch checksum mismatch: $actual != $PATCH_SHA256"
+ok "patch checksum verified"
+
+ensure_brain_dirs
+rm -rf "$BRAIN_PROXY_SRC"
+mkdir -p "$(dirname "$BRAIN_PROXY_SRC")"
+
+info "cloning CLIProxyAPI at pinned commit"
+git clone --no-checkout "$PROXY_REPO_URL" "$BRAIN_PROXY_SRC"
+git -C "$BRAIN_PROXY_SRC" checkout --detach "$COMMIT"
+head="$(git -C "$BRAIN_PROXY_SRC" rev-parse HEAD)"
+[ "$head" = "$COMMIT" ] || die "checkout drifted: HEAD=$head expected=$COMMIT"
+
+info "applying claude-effort patch"
+git -C "$BRAIN_PROXY_SRC" \
+  -c user.name=claude-brain -c user.email=build@claude-brain.invalid \
+  am "$BRAIN_PATCH_FILE"
+
+info "building (this can take a few minutes on a small droplet)"
+mkdir -p "$(dirname "$BRAIN_PROXY_BIN")"
+(cd "$BRAIN_PROXY_SRC" && go build -o "$BRAIN_PROXY_BIN" ./cmd/server)
+[ -x "$BRAIN_PROXY_BIN" ] || die "build produced no binary at $BRAIN_PROXY_BIN"
+chmod 700 "$BRAIN_PROXY_BIN"
+
+"$BRAIN_PROXY_BIN" --help >/dev/null 2>&1 || warn "binary --help smoke test failed (may still work)"
+printf '%s\n' "$COMMIT" > "$STAMP_FILE"
+ok "built $BRAIN_PROXY_BIN"

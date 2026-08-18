@@ -1,0 +1,15 @@
+[Unit]
+Description=CLIProxyAPI multi-provider proxy (claude-brain)
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/share/brain/proxy/bin/cli-proxy-api --config %h/.config/brain/proxy-config.yaml --local-model
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

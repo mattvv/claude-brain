@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# claude-brain droplet CLI.
+#
+#   brain            attach/create the Remote Control session (default)
+#   brain multi      parable-style multi-model session (no Remote Control)
+#   brain status     health overview: proxy, logins, sessions
+#   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
+#   brain setup      first-time onboarding wizard (resumable)
+#   brain update     pull latest claude-brain + rebuild what changed
+#   brain help       this text
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+AGENTS_DIR="$HOME/.claude/agents"
+AGENTS_RC_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-rc"
+AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-multi"
+UNIT_SRC="$BRAIN_REPO_DIR/droplet/systemd/cli-proxy-api.service"
+UNIT_DST="$HOME/.config/systemd/user/cli-proxy-api.service"
+
+# Names covered by both lanes; installing one lane removes the other's copies.
+ALL_BRAIN_AGENTS=(brain-fable brain-grok brain-kimi brain-luna brain-sol brain-terra)
+
+install_agents() {
+  local src="$1" name f
+  mkdir -p "$AGENTS_DIR"
+  for name in "${ALL_BRAIN_AGENTS[@]}"; do
+    rm -f "$AGENTS_DIR/$name.md"
+  done
+  for f in "$src"/*.md; do
+    cp "$f" "$AGENTS_DIR/$(basename "$f")"
+  done
+}
+
+step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
+step_todo() { printf '  %s %s\n' "${C_YELLOW}[    ]${C_RESET}" "$1"; }
+
+# ---------------------------------------------------------------- rc session
+cmd_rc() {
+  need tmux
+  claude_bin >/dev/null || die "claude not installed — run: brain setup"
+  install_agents "$AGENTS_RC_SRC"
+  if ! tmux has-session -t brain-rc 2>/dev/null; then
+    info "starting your brain session (tmux: brain-rc)"
+    info "inside Claude, run /remote-control once to link your phone / claude.ai"
+    sleep 1
+  fi
+  # RC needs api.anthropic.com: scrub any proxy override before launching.
+  exec tmux new-session -A -s brain-rc \
+    "env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY $(claude_bin); exec bash"
+}
+
+# ------------------------------------------------------------- multi session
+cmd_multi() {
+  need tmux
+  claude_bin >/dev/null || die "claude not installed — run: brain setup"
+  proxy_ready || die "proxy is not healthy — check: brain status"
+  install_agents "$AGENTS_MULTI_SRC"
+  local token
+  token="$(brain_token)"
+  info "starting multi-model session (tmux: brain-multi) — no phone control in this mode"
+  # 372000 = smallest context window across the cast (gpt-5.6-* models).
+  exec tmux new-session -A -s brain-multi \
+    "env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN \
+       ANTHROPIC_BASE_URL=$BRAIN_PROXY_URL \
+       ANTHROPIC_AUTH_TOKEN=$token \
+       CLAUDE_CODE_MAX_CONTEXT_TOKENS=372000 \
+       $(claude_bin) --model 'claude-fable-5[1m]'; exec bash"
+}
+
+# ------------------------------------------------------------------- status
+cmd_status() {
+  need curl jq
+  printf '%s\n' "${C_BOLD}claude-brain status${C_RESET}"
+
+  if systemctl --user is-active --quiet cli-proxy-api 2>/dev/null; then
+    ok "proxy service: running"
+  else
+    fail "proxy service: not running (systemctl --user status cli-proxy-api)"
+  fi
+
+  if proxy_ready; then
+    ok "proxy API: healthy on $BRAIN_PROXY_URL"
+    printf '    models: %s\n' "$(proxy_models | paste -sd', ' -)"
+  else
+    fail "proxy API: not responding on $BRAIN_PROXY_URL"
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    if ss -ltn 2>/dev/null | grep -q "0.0.0.0:$BRAIN_PROXY_PORT\|\[::\]:$BRAIN_PROXY_PORT"; then
+      fail "SECURITY: proxy is listening on a public interface — it must be 127.0.0.1 only"
+    fi
+  fi
+
+  printf '%s\n' "${C_BOLD}linked accounts (proxy vendors)${C_RESET}"
+  local found=0 f
+  for f in "$BRAIN_AUTH_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    found=1
+    ok "$(basename "$f" .json)"
+  done
+  [ "$found" -eq 1 ] || warn "none yet — run: brain auth chatgpt|grok|kimi"
+
+  printf '%s\n' "${C_BOLD}claude & github${C_RESET}"
+  if claude_bin >/dev/null; then
+    ok "claude installed: $("$(claude_bin)" --version 2>/dev/null | head -1)"
+  else
+    fail "claude not installed"
+  fi
+  if [ -e "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; then
+    ok "claude login present (verify inside a session with /status)"
+  else
+    warn "no claude login yet — run: brain auth anthropic"
+  fi
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    ok "github: logged in"
+  else
+    warn "github: not logged in — run: brain auth github"
+  fi
+
+  printf '%s\n' "${C_BOLD}sessions${C_RESET}"
+  if tmux has-session -t brain-rc 2>/dev/null; then
+    ok "brain-rc running (attach: brain)"
+  else
+    step_todo "brain-rc not running (start: brain)"
+  fi
+  if tmux has-session -t brain-multi 2>/dev/null; then
+    ok "brain-multi running (attach: brain multi)"
+  fi
+}
+
+# --------------------------------------------------------------------- auth
+cmd_auth() {
+  local vendor="${1:-}"
+  case "$vendor" in
+    anthropic)
+      claude_bin >/dev/null || die "claude not installed — run: brain setup"
+      info "launching claude — follow the login prompts, open the URL on your"
+      info "laptop or phone, paste the code back here, then /exit"
+      env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY "$(claude_bin)"
+      ;;
+    chatgpt)
+      [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+      info "ChatGPT device login: you'll get a URL + code to enter on any browser"
+      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --codex-device-login
+      ;;
+    grok)
+      [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+      info "Grok login: open the printed URL in your laptop browser"
+      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --xai-login --no-browser
+      ;;
+    kimi)
+      [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+      info "Kimi login: open the printed URL in your laptop browser"
+      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --kimi-login --no-browser
+      ;;
+    claude)
+      [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+      warn "this login's callback lands on localhost:54545 on THIS machine."
+      warn "First reconnect with:  ssh -L 54545:localhost:54545 claude-brain"
+      warn "(only needed for Claude models inside 'brain multi' — your main"
+      warn "session already has its own Claude login)"
+      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --claude-login --no-browser
+      ;;
+    github)
+      need gh
+      gh auth login --git-protocol https
+      gh auth setup-git
+      ;;
+    *)
+      die "usage: brain auth <anthropic|chatgpt|grok|kimi|claude|github>"
+      ;;
+  esac
+  # OAuth tools may write loose perms; re-tighten.
+  chmod 700 "$BRAIN_AUTH_DIR" 2>/dev/null || true
+  chmod 600 "$BRAIN_AUTH_DIR"/*.json 2>/dev/null || true
+}
+
+# -------------------------------------------------------------------- setup
+render_proxy_config() {
+  umask 077
+  sed -e "s|__TOKEN__|$(brain_token)|" -e "s|__AUTH_DIR__|$BRAIN_AUTH_DIR|" \
+    "$BRAIN_REPO_DIR/droplet/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
+  chmod 600 "$BRAIN_PROXY_CONFIG"
+}
+
+install_unit() {
+  mkdir -p "$(dirname "$UNIT_DST")"
+  cp "$UNIT_SRC" "$UNIT_DST"
+  systemctl --user daemon-reload
+  systemctl --user enable --now cli-proxy-api
+}
+
+ask_yn() {
+  local prompt="$1" reply
+  read -r -p "$prompt [Y/n] " reply </dev/tty || reply=""
+  case "$reply" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
+}
+
+cmd_setup() {
+  printf '%s\n\n' "${C_BOLD}Welcome to claude-brain setup!${C_RESET} (safe to re-run any time)"
+  ensure_brain_dirs
+
+  # 1. bootstrap artifacts
+  info "step 1/7: checking the machine"
+  command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
+  need git tmux jq curl openssl go
+  claude_bin >/dev/null || {
+    info "installing Claude Code"
+    curl -fsSL https://claude.ai/install.sh | bash
+    export PATH="$HOME/.local/bin:$PATH"
+  }
+  if [ -x "$BRAIN_PROXY_BIN" ]; then
+    step_done "proxy binary built"
+  else
+    if [ -f "$BRAIN_STATE_DIR/proxy-build.log" ] && pgrep -f brain-proxy-build >/dev/null 2>&1; then
+      info "background proxy build still running — waiting (log: $BRAIN_STATE_DIR/proxy-build.log)"
+      while pgrep -f brain-proxy-build >/dev/null 2>&1; do sleep 5; printf '.'; done
+      echo
+    fi
+    [ -x "$BRAIN_PROXY_BIN" ] || "$SCRIPT_DIR/brain-proxy-build"
+  fi
+
+  # 2. Claude login (the core product)
+  info "step 2/7: sign in to Claude (your main brain)"
+  if [ -e "$HOME/.claude/.credentials.json" ] || grep -q oauthAccount "$HOME/.claude.json" 2>/dev/null; then
+    step_done "claude login already present"
+  else
+    cmd_auth anthropic
+  fi
+
+  # 3. proxy config + token
+  info "step 3/7: configuring the model router"
+  if [ -f "$BRAIN_PROXY_CONFIG" ]; then
+    step_done "router config exists"
+  else
+    render_proxy_config
+    step_done "router config written"
+  fi
+
+  # 4. systemd service
+  info "step 4/7: starting the router service"
+  if systemctl --user is-active --quiet cli-proxy-api 2>/dev/null; then
+    step_done "router already running"
+  else
+    install_unit
+    sleep 2
+  fi
+  proxy_ready && ok "router healthy" || warn "router not answering yet — check 'brain status' in a minute"
+
+  # 5. vendor logins
+  info "step 5/7: link your other AI accounts (each optional — Enter to accept, n to skip)"
+  local rec
+  rec="$(ls "$BRAIN_AUTH_DIR"/codex-*.json 2>/dev/null | head -1)"
+  if [ -n "$rec" ]; then step_done "ChatGPT linked"; else
+    ask_yn "  Link a ChatGPT account (for GPT models)?" && cmd_auth chatgpt || true
+  fi
+  rec="$(ls "$BRAIN_AUTH_DIR"/xai-*.json 2>/dev/null | head -1)"
+  if [ -n "$rec" ]; then step_done "Grok linked"; else
+    ask_yn "  Link a Grok (X.AI) account?" && cmd_auth grok || true
+  fi
+  rec="$(ls "$BRAIN_AUTH_DIR"/kimi-*.json 2>/dev/null | head -1)"
+  if [ -n "$rec" ]; then step_done "Kimi linked"; else
+    ask_yn "  Link a Kimi account?" && cmd_auth kimi || true
+  fi
+
+  # 6. GitHub
+  info "step 6/7: connect GitHub (so your brain can work on your repos)"
+  if gh auth status >/dev/null 2>&1; then
+    step_done "github linked"
+  else
+    ask_yn "  Log in to GitHub now?" && cmd_auth github || true
+  fi
+  if [ -z "$(git config --global user.email 2>/dev/null)" ]; then
+    local gname gemail
+    read -r -p "  Your name for git commits: " gname </dev/tty || gname=""
+    read -r -p "  Your email for git commits: " gemail </dev/tty || gemail=""
+    [ -n "$gname" ] && git config --global user.name "$gname"
+    [ -n "$gemail" ] && git config --global user.email "$gemail"
+  fi
+
+  # 7. done
+  info "step 7/7: all set!"
+  cat <<'CHEAT'
+
+  Your everyday commands (run after `ssh claude-brain`):
+    brain          start/attach your main session, then /remote-control to link your phone
+    brain status   is everything healthy?
+    brain multi    power mode: other models drive natively (no phone control)
+    brain auth X   redo any login (anthropic|chatgpt|grok|kimi|github)
+    brain update   get the latest claude-brain
+
+CHEAT
+  if ask_yn "Start your brain session now?"; then
+    cmd_rc
+  fi
+}
+
+# ------------------------------------------------------------------- update
+cmd_update() {
+  info "updating claude-brain"
+  git -C "$BRAIN_REPO_DIR" pull --ff-only
+  "$BRAIN_REPO_DIR/droplet/install.sh"
+  "$SCRIPT_DIR/brain-proxy-build"   # no-op unless PIN changed
+  if claude_bin >/dev/null; then "$(claude_bin)" update || true; fi
+  if [ -f "$BRAIN_PROXY_CONFIG" ]; then
+    cp "$UNIT_SRC" "$UNIT_DST"
+    systemctl --user daemon-reload
+    systemctl --user restart cli-proxy-api
+  fi
+  ok "updated"
+}
+
+# ----------------------------------------------------------------- dispatch
+case "${1:-rc}" in
+  rc|"")     cmd_rc ;;
+  multi)     cmd_multi ;;
+  status)    cmd_status ;;
+  auth)      shift; cmd_auth "$@" ;;
+  setup)     cmd_setup ;;
+  update)    cmd_update ;;
+  help|-h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)         die "unknown command: $1 (try: brain help)" ;;
+esac

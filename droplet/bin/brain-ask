@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Ask a model behind the local claude-brain proxy a one-shot question.
+#
+#   brain-ask <model> [options] [prompt]
+#   echo "prompt" | brain-ask <model> [options] -
+#
+# Options:
+#   --system FILE     system prompt from a file
+#   --max-tokens N    response cap (default 8192)
+#   --effort LEVEL    reasoning effort: low|medium|high|xhigh (model-dependent)
+#   --raw             print the raw JSON response instead of extracted text
+#
+# The remote model sees ONLY what you send: include all needed context in the
+# prompt. Exit is non-zero on HTTP or transport errors, with the body on stderr.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+need curl jq
+
+MODEL="${1:-}"
+[ -n "$MODEL" ] || die "usage: brain-ask <model> [--system file] [--max-tokens N] [--effort E] [--raw] [prompt|-]"
+shift
+
+SYSTEM_FILE="" MAX_TOKENS=8192 EFFORT="" RAW=0 PROMPT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --system)     SYSTEM_FILE="$2"; shift 2 ;;
+    --max-tokens) MAX_TOKENS="$2"; shift 2 ;;
+    --effort)     EFFORT="$2"; shift 2 ;;
+    --raw)        RAW=1; shift ;;
+    -)            PROMPT="$(cat)"; shift ;;
+    *)            PROMPT="$1"; shift ;;
+  esac
+done
+if [ -z "$PROMPT" ]; then
+  [ -t 0 ] && die "no prompt given (pass as argument, or pipe with '-')"
+  PROMPT="$(cat)"
+fi
+[ -n "$PROMPT" ] || die "empty prompt"
+
+SYSTEM=""
+if [ -n "$SYSTEM_FILE" ]; then
+  [ -f "$SYSTEM_FILE" ] || die "system file not found: $SYSTEM_FILE"
+  SYSTEM="$(cat "$SYSTEM_FILE")"
+fi
+
+BODY="$(jq -n \
+  --arg model "$MODEL" \
+  --arg prompt "$PROMPT" \
+  --arg system "$SYSTEM" \
+  --arg effort "$EFFORT" \
+  --argjson max_tokens "$MAX_TOKENS" \
+  '{model: $model, max_tokens: $max_tokens,
+    messages: [{role: "user", content: $prompt}]}
+   + (if $system != "" then {system: $system} else {} end)
+   + (if $effort != "" then {output_config: {effort: $effort}} else {} end)')"
+
+RESPONSE_FILE="$(mktemp)"
+trap 'rm -f "$RESPONSE_FILE"' EXIT
+
+HTTP_CODE="$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
+  --max-time 600 \
+  -H "Authorization: Bearer $(brain_token)" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -X POST "$BRAIN_PROXY_URL/v1/messages" \
+  -d "$BODY")" || { fail "could not reach the proxy at $BRAIN_PROXY_URL (is cli-proxy-api running? try: brain status)"; exit 1; }
+
+if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+  fail "proxy returned HTTP $HTTP_CODE for model '$MODEL'"
+  cat "$RESPONSE_FILE" >&2
+  echo >&2
+  exit 1
+fi
+
+if [ "$RAW" -eq 1 ]; then
+  cat "$RESPONSE_FILE"
+else
+  jq -r '[.content[] | select(.type == "text") | .text] | join("\n")' "$RESPONSE_FILE"
+fi
