@@ -7,7 +7,7 @@ droplet), but nothing has to be installed on your laptop.
 ## 1. Get the bootstrap file
 
 Open the raw file
-[`cloud-init.yaml`](https://raw.githubusercontent.com/REPO_OWNER/claude-brain/main/cloud-init.yaml)
+[`cloud-init.yaml`](https://raw.githubusercontent.com/mattvv/claude-brain/main/cloud-init.yaml)
 in your browser and copy its entire contents.
 
 ## 2. Create the droplet

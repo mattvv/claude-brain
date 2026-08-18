@@ -43,7 +43,7 @@ services — and it can work directly on your **GitHub** repositories.
 Open the Terminal app on your laptop, paste this, and press Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/REPO_OWNER/claude-brain/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mattvv/claude-brain/main/setup.sh | bash
 ```
 
 It will:

@@ -54,7 +54,7 @@ runcmd:
   # Keep the user systemd instance (router service) alive without a login.
   - loginctl enable-linger brain
   # claude-brain itself.
-  - sudo -u brain -H git clone https://github.com/REPO_OWNER/claude-brain.git /home/brain/claude-brain
+  - sudo -u brain -H git clone https://github.com/mattvv/claude-brain.git /home/brain/claude-brain
   - sudo -u brain -H /home/brain/claude-brain/droplet/install.sh
   # Claude Code (self-contained native installer; no Node required).
   - sudo -u brain -H bash -c 'curl -fsSL https://claude.ai/install.sh | bash'

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude-brain laptop bootstrapper.
 #
-#   curl -fsSL https://raw.githubusercontent.com/REPO_OWNER/claude-brain/main/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mattvv/claude-brain/main/setup.sh | bash
 #
 # Creates a DigitalOcean droplet running your personal Claude brain, then hands
 # you off to `brain setup` on the droplet. Works on macOS and Linux. Your DO
@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO_RAW="${BRAIN_REPO_RAW:-https://raw.githubusercontent.com/REPO_OWNER/claude-brain/main}"
+REPO_RAW="${BRAIN_REPO_RAW:-https://raw.githubusercontent.com/mattvv/claude-brain/main}"
 DEFAULT_NAME="claude-brain"
 DEFAULT_REGION="nyc3"
 DEFAULT_SIZE="s-1vcpu-2gb"
