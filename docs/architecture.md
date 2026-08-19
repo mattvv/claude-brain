@@ -90,6 +90,25 @@ The proxy itself is dumb fan-out; task→model routing lives a layer up (parable
   next fallback", instead of a raw HTTP error mid-task. Registered idempotently in
   `~/.claude/settings.json` by `droplet/install.sh`.
 
+## Self-service operations
+
+The brain administers its own machine. `droplet/claude/brain-ops.md` is installed into
+`~/.claude/CLAUDE.md` (managed `ops` block, alongside the lane's `routing` block) and
+tells every session it may install packages/MCP servers, update itself, and link vendor
+accounts using the headless auth flow:
+
+- `brain auth start <vendor>` runs the OAuth login in a detached tmux pane
+  (`tmux pipe-pane` captures output) and prints the login URL — which a Claude session
+  relays to the user's phone.
+- ChatGPT's device flow completes on its own (`brain auth check chatgpt` polls).
+- Grok/Kimi callbacks land on a dead `localhost` URL in the user's browser; the user
+  pastes it back into chat and `brain auth paste <vendor> '<url>'` feeds it to the
+  waiting login's pty via `tmux send-keys`.
+
+Updates: `brain update` = `git pull` + re-run install (agents/hooks/routing/unit refresh)
++ proxy rebuild if the PIN changed + `claude update`. The `brain`/`brain multi` launchers
+also `git fetch` at startup (8s timeout, silent on failure) and prompt when behind.
+
 ## Provisioning
 
 `setup.sh` (laptop, via doctl) and the manual DO-console path share one

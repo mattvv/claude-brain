@@ -85,6 +85,15 @@ Want a second opinion from another model mid-conversation? Just ask — e.g. *"h
 brain-grok double-check this"* or *"ask brain-sol to review this diff"*. Claude delegates
 to the router and brings the answer back.
 
+**Your brain manages itself.** From that same phone session you can just ask it to:
+- *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
+- *"link my Grok account"* — same, you tap the link, then paste the address it lands on back into chat;
+- *"install &lt;some tool&gt;"* or *"add the &lt;X&gt; MCP server"* — it installs and configures it on the droplet;
+- *"update yourself"* — it pulls the latest claude-brain release.
+
+Skipping a login during setup is fine — you can always link accounts later this way,
+without ever touching a terminal.
+
 ## Everyday use
 
 | Command | What it does |
@@ -93,7 +102,7 @@ to the router and brings the answer back.
 | `brain status` | Health check: router, linked accounts, sessions |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` |
-| `brain update` | Get the latest claude-brain |
+| `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
 
 All run on the droplet, after `ssh claude-brain`.
 

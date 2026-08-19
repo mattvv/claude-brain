@@ -5,6 +5,8 @@
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: proxy, logins, sessions
 #   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
+#   brain auth start|paste|check X   drive a login non-interactively (for
+#                    Claude sessions / remote use — see brain-ops.md)
 #   brain setup      first-time onboarding wizard (resumable)
 #   brain update     pull latest claude-brain + rebuild what changed
 #   brain help       this text
@@ -35,10 +37,10 @@ install_agents() {
   done
 }
 
-# Install the lane's routing table into ~/.claude/CLAUDE.md as a managed block.
-install_routing() {
-  local src="$1" target="$HOME/.claude/CLAUDE.md" tmp
-  local start='<!-- claude-brain:routing:start -->' end='<!-- claude-brain:routing:end -->'
+# Install a managed block into ~/.claude/CLAUDE.md, replacing any previous copy.
+install_block() {
+  local src="$1" label="$2" target="$HOME/.claude/CLAUDE.md" tmp
+  local start="<!-- claude-brain:$label:start -->" end="<!-- claude-brain:$label:end -->"
   mkdir -p "$HOME/.claude"
   tmp="$(mktemp)"
   if [ -f "$target" ]; then
@@ -48,13 +50,33 @@ install_routing() {
   mv "$tmp" "$target"
 }
 
+install_routing() {
+  install_block "$1" routing
+  install_block "$BRAIN_REPO_DIR/droplet/claude/brain-ops.md" ops
+}
+
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
 step_todo() { printf '  %s %s\n' "${C_YELLOW}[    ]${C_RESET}" "$1"; }
+
+# Check for a newer claude-brain at session launch; prompt to install.
+# Silent and non-blocking on network trouble.
+check_for_updates() {
+  [ -t 0 ] || return 0
+  timeout 8 git -C "$BRAIN_REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
+  local behind
+  behind="$(git -C "$BRAIN_REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+  [ "$behind" -gt 0 ] || return 0
+  warn "a claude-brain update is available ($behind new change$([ "$behind" -gt 1 ] && echo s))"
+  if ask_yn "Install it now?"; then
+    cmd_update
+  fi
+}
 
 # ---------------------------------------------------------------- rc session
 cmd_rc() {
   need tmux
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
+  check_for_updates
   install_agents "$AGENTS_RC_SRC"
   install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
   if ! tmux has-session -t brain-rc 2>/dev/null; then
@@ -72,6 +94,7 @@ cmd_multi() {
   need tmux
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   proxy_ready || die "proxy is not healthy — check: brain status"
+  check_for_updates
   install_agents "$AGENTS_MULTI_SRC"
   install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-multi.md"
   local token
@@ -147,9 +170,117 @@ cmd_status() {
   fi
 }
 
+# ------------------------------------------------------------ headless auth
+# Runs an OAuth login inside a detached tmux pane so it can be driven from a
+# Claude session (or over plain ssh): 'start' launches it and prints the URL,
+# 'paste' feeds the callback URL back to it, 'check' reports the outcome.
+
+vendor_login_flags() {
+  case "$1" in
+    chatgpt) echo "--codex-device-login" ;;
+    grok)    echo "--xai-login --no-browser" ;;
+    kimi)    echo "--kimi-login --no-browser" ;;
+    claude)  echo "--claude-login --no-browser" ;;
+    *)       return 1 ;;
+  esac
+}
+
+vendor_record_prefix() {
+  case "$1" in
+    chatgpt) echo codex ;;
+    grok)    echo xai ;;
+    kimi)    echo kimi ;;
+    claude)  echo claude ;;
+    *)       return 1 ;;
+  esac
+}
+
+vendor_linked() {
+  local prefix f
+  prefix="$(vendor_record_prefix "$1")" || return 1
+  for f in "$BRAIN_AUTH_DIR/$prefix"-*.json; do
+    [ -e "$f" ] && return 0
+  done
+  return 1
+}
+
+cmd_auth_start() {
+  local vendor="$1" flags log
+  flags="$(vendor_login_flags "$vendor")" || die "unknown vendor: $vendor"
+  [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+  need tmux
+  log="$BRAIN_STATE_DIR/auth-$vendor.log"
+  mkdir -p "$BRAIN_STATE_DIR"
+  rm -f "$log"
+  tmux kill-session -t "auth-$vendor" 2>/dev/null || true
+  # Brief sleep so pipe-pane attaches before the login prints its URL.
+  # shellcheck disable=SC2086  # flags are intentionally word-split
+  tmux new-session -d -s "auth-$vendor" \
+    "sleep 1; $BRAIN_PROXY_BIN --config $BRAIN_PROXY_CONFIG $flags"
+  tmux pipe-pane -t "auth-$vendor" -o "cat >> $log"
+
+  local i url=""
+  for i in $(seq 1 30); do
+    sleep 1
+    url="$(grep -oE 'https://[^[:space:]]+' "$log" 2>/dev/null | head -1 || true)"
+    [ -n "$url" ] && break
+    tmux has-session -t "auth-$vendor" 2>/dev/null || break
+  done
+  if [ -z "$url" ]; then
+    fail "no login URL appeared after ${i}s — output so far:"
+    cat "$log" >&2 2>/dev/null || true
+    exit 1
+  fi
+
+  info "open this link in any browser and approve:"
+  printf '\n  %s\n\n' "$url"
+  if [ "$vendor" = chatgpt ]; then
+    grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log" | head -1 \
+      | sed 's/^/  device code: /' || true
+    info "then run: brain auth check chatgpt"
+  else
+    info "after approving, the browser lands on a localhost address that won't load —"
+    info "copy that address and run: brain auth paste $vendor '<that-url>'"
+  fi
+}
+
+cmd_auth_paste() {
+  local vendor="$1" url="${2:-}"
+  [ -n "$url" ] || die "usage: brain auth paste <vendor> '<callback-url>'"
+  tmux has-session -t "auth-$vendor" 2>/dev/null \
+    || die "no login in progress for $vendor — run: brain auth start $vendor"
+  tmux send-keys -t "auth-$vendor" -l "$url"
+  tmux send-keys -t "auth-$vendor" Enter
+  sleep 3
+  cmd_auth_check "$vendor"
+}
+
+cmd_auth_check() {
+  local vendor="$1"
+  chmod 700 "$BRAIN_AUTH_DIR" 2>/dev/null || true
+  chmod 600 "$BRAIN_AUTH_DIR"/*.json 2>/dev/null || true
+  if vendor_linked "$vendor"; then
+    tmux kill-session -t "auth-$vendor" 2>/dev/null || true
+    ok "$vendor linked"
+  elif tmux has-session -t "auth-$vendor" 2>/dev/null; then
+    warn "$vendor login still in progress — recent output:"
+    tail -5 "$BRAIN_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
+    exit 1
+  else
+    fail "$vendor login ended without a credential — output:"
+    tail -15 "$BRAIN_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
+    exit 1
+  fi
+}
+
 # --------------------------------------------------------------------- auth
 cmd_auth() {
   local vendor="${1:-}"
+  case "$vendor" in
+    start) shift; cmd_auth_start "${1:?usage: brain auth start <chatgpt|grok|kimi|claude>}"; return ;;
+    paste) shift; cmd_auth_paste "${1:?vendor required}" "${2:-}"; return ;;
+    check) shift; cmd_auth_check "${1:?vendor required}"; return ;;
+  esac
   case "$vendor" in
     anthropic)
       claude_bin >/dev/null || die "claude not installed — run: brain setup"
@@ -337,6 +468,6 @@ case "${1:-rc}" in
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
