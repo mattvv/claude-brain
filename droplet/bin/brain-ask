@@ -72,15 +72,24 @@ trap 'rm -f "$AUTH_HDR"' EXIT
 
 if [ "$STREAM" -eq 1 ]; then
   # Print text deltas as SSE events arrive, teeing a live copy to the consult
-  # log so the statusline / `tail -f` can watch it. On HTTP errors curl exits
-  # 22 (--fail-with-body) and the SSE filters drop the error body, so point
-  # the caller at the non-streaming mode for details.
+  # log so the statusline / `tail -f` can watch it. Reasoning-summary deltas go
+  # to a `.thinking` sidecar instead of stdout: they must stay out of the answer
+  # (callers pipe stdout), but they are what makes a long silent think visible.
+  # On HTTP errors curl exits 22 (--fail-with-body) and the SSE filters drop the
+  # error body, so point the caller at the non-streaming mode for details.
   CONSULT_DIR="$BRAIN_STATE_DIR/consult"
   mkdir -p "$CONSULT_DIR"
   # (ls exits 2 when no logs exist yet — same set -e/pipefail trap as 0076294)
   { ls -t "$CONSULT_DIR"/*.log 2>/dev/null || true; } | tail -n +20 | xargs -r rm -f
+  # Drop reasoning sidecars whose answer log has been retired.
+  for t in "$CONSULT_DIR"/*.log.thinking; do
+    [ -e "$t" ] || continue
+    [ -e "${t%.thinking}" ] || rm -f "$t"
+  done
   CONSULT_LOG="$CONSULT_DIR/$MODEL-$(date +%s).log"
+  THINK_LOG="$CONSULT_LOG.thinking"
   : > "$CONSULT_LOG"
+  : > "$THINK_LOG"
   ln -sfn "$CONSULT_LOG" "$CONSULT_DIR/current"
   warn "streaming — watch live: tail -f $CONSULT_DIR/current"
   curl -sSN --fail-with-body --connect-timeout 10 --max-time 3600 \
@@ -89,6 +98,11 @@ if [ "$STREAM" -eq 1 ]; then
     -H "content-type: application/json" \
     -X POST "$BRAIN_PROXY_URL/v1/messages" \
     -d "$BODY" \
+  | tee >(sed -nu -e 's/^data: *//p' \
+          | jq --unbuffered -rj '
+              if .type == "content_block_delta" and (.delta.type // "") == "thinking_delta"
+              then .delta.thinking else empty end' \
+          >> "$THINK_LOG") \
   | sed -nu -e '/^data: *\[DONE\]/d' -e 's/^data: *//p' \
   | jq --unbuffered -rj '
       if .type == "content_block_delta" and (.delta.type // "") == "text_delta"
