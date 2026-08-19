@@ -48,6 +48,28 @@ brain-proxy-build --force
 - Test the router directly: `brain-ask grok-4.5 "say hi"`. The error it prints
   (HTTP 401 = token problem, connection refused = router down) tells you which fix above applies.
 
+## ChatGPT keeps saying "enable device code authorization"
+
+Some ChatGPT accounts won't accept the device-code login even after enabling
+**Settings → Security → Device code authorization** (plan and workspace restrictions
+apply, and the toggle can take a while to stick). The reliable fallback is to log in
+where a browser works and copy the credential to the brain:
+
+1. On your laptop, produce a working Codex credential — if you use
+   [Parable](https://parable.sh), you already have one in `~/.cli-proxy-api/`.
+2. Copy it to the droplet (it stays owner-only on both ends):
+
+   ```bash
+   scp -p ~/.cli-proxy-api/codex-*.json claude-brain:.cli-proxy-api/
+   ssh claude-brain 'chmod 600 ~/.cli-proxy-api/codex-*.json && systemctl --user restart cli-proxy-api'
+   ```
+
+3. Verify from the droplet: `brain-ask gpt-5.6-luna "say ok"`.
+
+The router refreshes the credential itself from then on. The same trick works for any
+vendor record (`xai-*.json`, `kimi-*.json`). Note the copied login is then live in two
+places — remove one copy if that bothers you.
+
 ## `ssh claude-brain` says "Permission denied (publickey)"
 
 Your laptop's SSH key doesn't match the one on the droplet. From your laptop:
