@@ -22,3 +22,6 @@ Rules:
   a consultant from a different vendor than the one that wrote the code.
 - If a consultant reports its vendor isn't linked, tell the user the exact fix
   (`brain auth chatgpt|grok|kimi`) and continue with the next fallback.
+- If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,
+  then resume that SAME agent with the answers (its gathered context is intact) rather
+  than spawning a fresh one.

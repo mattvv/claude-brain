@@ -38,6 +38,11 @@ and starts a Remote Control server for that repo — its sessions then appear in
 Claude app). `brain repo ls` shows what's set up; `brain repo stop <name>` ends one.
 Run these detached (the server lives in tmux), then confirm with `brain repo ls`.
 
+**Adjust brain defaults on request**: `brain config` shows the user's settings. If they
+ask to watch consultants work live (or to stop watching), run
+`brain config consult <foreground|background>` — it updates the CLAUDE.md guidance for
+new sessions; honor the new choice immediately in the current session too.
+
 **Update claude-brain yourself**: `brain update` pulls the latest release, refreshes
 agents/hooks/routing, and restarts the router. Safe to run mid-session; a new Claude
 binary applies on the next session restart. The `brain` launcher also checks for updates

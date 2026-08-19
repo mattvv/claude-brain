@@ -12,6 +12,7 @@ BRAIN_STATE_DIR="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
 BRAIN_AUTH_DIR="${BRAIN_AUTH_DIR:-$HOME/.cli-proxy-api}"
 
 BRAIN_TOKEN_FILE="$BRAIN_CONFIG_DIR/token"
+BRAIN_SETTINGS_FILE="$BRAIN_CONFIG_DIR/settings"
 BRAIN_PROXY_CONFIG="$BRAIN_CONFIG_DIR/proxy-config.yaml"
 BRAIN_PROXY_SRC="$BRAIN_DATA_DIR/proxy/src"
 BRAIN_PROXY_BIN="$BRAIN_DATA_DIR/proxy/bin/cli-proxy-api"
@@ -42,6 +43,23 @@ need() {
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
   [ ${#missing[@]} -eq 0 ] || die "missing required commands: ${missing[*]}"
+}
+
+# Read a KEY=VALUE user setting, falling back to a default: setting_get KEY DEFAULT
+setting_get() {
+  local val=""
+  [ -f "$BRAIN_SETTINGS_FILE" ] && val="$(sed -n "s/^$1=//p" "$BRAIN_SETTINGS_FILE" | tail -1)"
+  printf '%s\n' "${val:-$2}"
+}
+
+# Write a KEY=VALUE user setting: setting_set KEY VALUE
+setting_set() {
+  ensure_brain_dirs
+  umask 077
+  touch "$BRAIN_SETTINGS_FILE"
+  { grep -v "^$1=" "$BRAIN_SETTINGS_FILE" || true; printf '%s=%s\n' "$1" "$2"; } \
+    > "$BRAIN_SETTINGS_FILE.tmp"
+  mv "$BRAIN_SETTINGS_FILE.tmp" "$BRAIN_SETTINGS_FILE"
 }
 
 # Read a KEY=VALUE entry from the PIN file.

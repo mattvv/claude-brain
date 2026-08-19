@@ -12,6 +12,8 @@
 #   brain auth start|paste|check X   drive a login non-interactively (for
 #                    Claude sessions / remote use — see brain-ops.md)
 #   brain setup      first-time onboarding wizard (resumable)
+#   brain config     settings: consult foreground|background (watch brain-*
+#                    consultants work live, or run them in the background)
 #   brain update     pull latest claude-brain + rebuild what changed
 #   brain help       this text
 
@@ -57,6 +59,16 @@ install_block() {
 install_routing() {
   install_block "$1" routing
   install_block "$BRAIN_REPO_DIR/droplet/claude/brain-ops.md" ops
+  install_consult_block
+}
+
+# Consultant visibility: background (default — visible via the statusline and
+# the consult stream log) or foreground (consult inline in the main chat).
+# Chosen via 'brain config consult', applied as a CLAUDE.md block.
+install_consult_block() {
+  local mode
+  mode="$(setting_get CONSULT_VISIBILITY background)"
+  install_block "$BRAIN_REPO_DIR/droplet/claude/consult-$mode.md" consult
 }
 
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
@@ -593,6 +605,37 @@ cmd_expose() {
   esac
 }
 
+# ------------------------------------------------------------------- config
+cmd_config() {
+  local key="${1:-}" val="${2:-}"
+  case "$key" in
+    '')
+      printf '%s\n' "${C_BOLD}brain settings${C_RESET}"
+      printf '  consult = %s   (brain config consult <foreground|background>)\n' \
+        "$(setting_get CONSULT_VISIBILITY background)"
+      ;;
+    consult)
+      case "$val" in
+        '')
+          printf '%s\n' "$(setting_get CONSULT_VISIBILITY background)"
+          ;;
+        foreground|background)
+          setting_set CONSULT_VISIBILITY "$val"
+          install_consult_block
+          ok "brain-* consultants now run in the $val by default"
+          info "applies to new Claude sessions (and the current one after a restart)"
+          ;;
+        *)
+          die "usage: brain config consult [foreground|background]"
+          ;;
+      esac
+      ;;
+    *)
+      die "usage: brain config [consult <foreground|background>]"
+      ;;
+  esac
+}
+
 # ------------------------------------------------------------------- update
 cmd_update() {
   info "updating claude-brain"
@@ -617,7 +660,8 @@ case "${1:-rc}" in
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
+  config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
