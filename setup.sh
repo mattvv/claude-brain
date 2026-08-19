@@ -19,6 +19,10 @@ say()  { printf '%s\n' "$*"; }
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 ask()  { local v; read -r -p "$1" v </dev/tty || v=""; printf '%s' "${v:-$2}"; }
 
+# Everything lives in main() so a partial download can't execute, and so ssh
+# calls below can't swallow the remainder of the script when run via curl|bash.
+main() {
+
 for c in curl ssh ssh-keygen; do
   command -v "$c" >/dev/null 2>&1 || die "required command missing: $c"
 done
@@ -94,13 +98,13 @@ say "Droplet is up at $IP. Waiting for it to finish installing (5–10 min)..."
 
 # ---- wait for bootstrap ----------------------------------------------------
 tries=0
-until ssh -i "$KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+until ssh -n -i "$KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
       -o BatchMode=yes "brain@$IP" true 2>/dev/null; do
   tries=$((tries + 1))
   [ "$tries" -le 60 ] || die "could not SSH to brain@$IP — check the droplet in the DO console"
   sleep 10
 done
-ssh -i "$KEY" "brain@$IP" 'cloud-init status --wait >/dev/null 2>&1 || true'
+ssh -n -i "$KEY" "brain@$IP" 'cloud-init status --wait >/dev/null 2>&1 || true'
 
 # ---- ssh config + handoff --------------------------------------------------
 if ! grep -q "^Host $NAME\$" "$HOME/.ssh/config" 2>/dev/null; then
@@ -119,3 +123,6 @@ case "$reply" in
   n|N|no|NO) say "Later, run:  ssh $NAME   then:  brain setup" ;;
   *) exec ssh -i "$KEY" -t "brain@$IP" 'bash -lc "brain setup"' ;;
 esac
+
+}
+main "$@"
