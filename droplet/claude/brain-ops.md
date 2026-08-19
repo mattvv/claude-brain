@@ -22,6 +22,16 @@ with the Bash tool and relay the URL to the user in chat:
    `brain auth paste <vendor> '<pasted-url>'`.
 4. Confirm with `brain auth check <vendor>` and `brain status`.
 
+**Show the user running web apps** with `brain expose` (never by opening firewall ports):
+- User wants to see a dev server: start the app, run `brain expose <port>`, and give them
+  the printed `https://...ts.net` link (works on their phone if it's on their tailnet).
+- User wants to share with someone else: `brain expose <port> --public` (Tailscale
+  Funnel — world-reachable). Remind them to `brain expose off` when done, and run it
+  yourself when the demo is clearly over.
+- If expose says Tailscale isn't set up, offer to link it: run `brain auth tailscale`
+  in the background, relay the printed approval URL to the user (they need the Tailscale
+  app on their phone — tailscale.com/download), and confirm with `brain status`.
+
 **Update claude-brain yourself**: `brain update` pulls the latest release, refreshes
 agents/hooks/routing, and restarts the router. Safe to run mid-session; a new Claude
 binary applies on the next session restart. The `brain` launcher also checks for updates

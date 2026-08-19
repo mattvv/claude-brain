@@ -109,6 +109,17 @@ Updates: `brain update` = `git pull` + re-run install (agents/hooks/routing/unit
 + proxy rebuild if the PIN changed + `claude update`. The `brain`/`brain multi` launchers
 also `git fetch` at startup (8s timeout, silent on failure) and prompt when behind.
 
+## Exposing dev servers
+
+`ufw` never opens anything beyond SSH. Web apps the brain builds are shared via
+Tailscale: `brain auth tailscale` joins the owner's tailnet (install-on-demand, approval
+URL relayed to the phone, `ufw allow in on tailscale0` so tailnet traffic passes the
+default-deny firewall), then `brain expose <port>` maps the port with `tailscale serve`
+(tailnet-only HTTPS) or `--public` with `tailscale funnel` (world-reachable, revocable
+via `brain expose off`). The raw droplet IP is deliberately never used for app traffic:
+always-on dev servers on a public IP are scanner bait, and this box holds live OAuth
+tokens.
+
 ## Provisioning
 
 `setup.sh` (laptop, via doctl) and the manual DO-console path share one

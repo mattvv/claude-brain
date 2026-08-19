@@ -94,6 +94,18 @@ to the router and brings the answer back.
 Skipping a login during setup is fine — you can always link accounts later this way,
 without ever touching a terminal.
 
+## Seeing what your brain builds
+
+When your brain is building you a web app, you'll want to open it. That works through
+[Tailscale](https://tailscale.com) (free), which puts your phone and your droplet on a
+private network — no ports ever open to the internet:
+
+1. Install the Tailscale app on your phone and sign in (Google/Apple/GitHub account works).
+2. Ask your brain to *"set up tailscale"* — it sends you an approval link, you tap it. Once.
+3. From then on: *"show me the app"* gets you a private `https://…ts.net` link that opens
+   right on your phone. Ask for a **public** link when you want to send it to a friend —
+   and tell your brain to *"stop sharing"* when you're done.
+
 ## Everyday use
 
 | Command | What it does |
@@ -101,7 +113,8 @@ without ever touching a terminal.
 | `brain` | Start/attach your main session (the one with phone control) |
 | `brain status` | Health check: router, linked accounts, sessions |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
-| `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` |
+| `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
+| `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
 | `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
 
 All run on the droplet, after `ssh claude-brain`.
@@ -131,6 +144,8 @@ The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.m
 - The droplet accepts **SSH only** (key-based, no passwords, no root login) and updates
   itself with security patches automatically.
 - The model router listens only inside the droplet — it is never reachable from the internet.
+- Dev servers are shared through Tailscale (`brain expose`), never by opening ports.
+  Public Funnel links are explicit and stopped with `brain expose off`.
 - Never share the files in `~/.config/brain/` or `~/.cli-proxy-api/` on the droplet: they
   hold live login tokens for your accounts.
 - Done with everything? `doctl compute droplet delete claude-brain` wipes it all.

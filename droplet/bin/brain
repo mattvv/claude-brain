@@ -4,6 +4,8 @@
 #   brain            attach/create the Remote Control session (default)
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: proxy, logins, sessions
+#   brain expose P   share a dev server on port P (tailnet HTTPS; --public
+#                    for a world-reachable Funnel URL; 'off' to stop)
 #   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
 #   brain auth start|paste|check X   drive a login non-interactively (for
 #                    Claude sessions / remote use — see brain-ops.md)
@@ -157,6 +159,13 @@ cmd_status() {
     ok "github: logged in"
   else
     warn "github: not logged in — run: brain auth github"
+  fi
+
+  printf '%s\n' "${C_BOLD}tailscale${C_RESET}"
+  if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
+    ok "connected: $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+  else
+    step_todo "not connected (optional — brain auth tailscale enables 'brain expose')"
   fi
 
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
@@ -316,8 +325,20 @@ cmd_auth() {
       gh auth login --git-protocol https
       gh auth setup-git
       ;;
+    tailscale)
+      if ! command -v tailscale >/dev/null 2>&1; then
+        info "installing Tailscale"
+        curl -fsSL https://tailscale.com/install.sh | sudo sh
+      fi
+      info "open the URL below on your phone/laptop and approve this machine"
+      info "(install the Tailscale app on your phone first: tailscale.com/download)"
+      sudo tailscale up --timeout 240s
+      # Let tailnet traffic through the default-deny firewall (tailscale0 only).
+      sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
+      ok "joined tailnet as: $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+      ;;
     *)
-      die "usage: brain auth <anthropic|chatgpt|grok|kimi|claude|github>"
+      die "usage: brain auth <anthropic|chatgpt|grok|kimi|claude|github|tailscale>"
       ;;
   esac
   # OAuth tools may write loose perms; re-tighten.
@@ -445,6 +466,38 @@ CHEAT
   fi
 }
 
+# ------------------------------------------------------------------- expose
+# Share a local dev server: private HTTPS on the tailnet by default, public
+# via Tailscale Funnel with --public. Never opens firewall ports.
+cmd_expose() {
+  local arg="${1:-}" public=0
+  [ "${2:-}" = "--public" ] && public=1
+  command -v tailscale >/dev/null 2>&1 || die "Tailscale isn't set up — run: brain auth tailscale"
+  tailscale status >/dev/null 2>&1 || die "Tailscale is not connected — run: brain auth tailscale"
+  case "$arg" in
+    off)
+      sudo tailscale serve reset
+      sudo tailscale funnel reset 2>/dev/null || true
+      ok "nothing is exposed any more"
+      ;;
+    ''|*[!0-9]*)
+      die "usage: brain expose <port> [--public] | brain expose off"
+      ;;
+    *)
+      local host
+      host="$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+      if [ "$public" -eq 1 ]; then
+        sudo tailscale funnel --bg "$arg" >/dev/null
+        ok "PUBLIC (anyone with the link): https://$host/"
+        warn "this is on the open internet — run 'brain expose off' when done"
+      else
+        sudo tailscale serve --bg "$arg" >/dev/null
+        ok "private (your tailnet devices only): https://$host/"
+      fi
+      ;;
+  esac
+}
+
 # ------------------------------------------------------------------- update
 cmd_update() {
   info "updating claude-brain"
@@ -465,9 +518,10 @@ case "${1:-rc}" in
   rc|"")     cmd_rc ;;
   multi)     cmd_multi ;;
   status)    cmd_status ;;
+  expose)    shift; cmd_expose "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
