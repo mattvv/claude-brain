@@ -73,6 +73,23 @@ A pinned, patched build of
 - Runs as a systemd **user** service (`droplet/systemd/cli-proxy-api.service`) with
   `Restart=always`; `loginctl enable-linger` keeps it alive without a login session.
 
+## Routing intelligence
+
+The proxy itself is dumb fan-out; task→model routing lives a layer up (parable's design):
+
+- **Routing tables** (`droplet/claude/routing-rc.md`, `routing-multi.md`) — per-task-class
+  preference orderings with fallbacks and effort guidance, adapted from parable's
+  `[routing]` config. Launching a lane installs its table into the droplet's
+  `~/.claude/CLAUDE.md` as a managed block, so the brain reads it every session.
+- **Effort tiers** — easy classes route to cheap lanes at `low`/`medium` effort; hard
+  classes climb to sol/fable at `xhigh`. Multi-lane efforts are pinned in agent
+  frontmatter; the RC lane passes `--effort` per call through `brain-ask`.
+- **Model guard** (`droplet/claude/hooks/model-guard.sh`) — a PreToolUse hook, modeled on
+  parable's `model_guard.py`, that blocks delegation to a `brain-*` agent whose vendor
+  isn't linked and tells the model the exact fix (`brain auth <vendor>`) plus "use the
+  next fallback", instead of a raw HTTP error mid-task. Registered idempotently in
+  `~/.claude/settings.json` by `droplet/install.sh`.
+
 ## Provisioning
 
 `setup.sh` (laptop, via doctl) and the manual DO-console path share one

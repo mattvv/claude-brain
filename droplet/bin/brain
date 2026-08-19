@@ -35,6 +35,19 @@ install_agents() {
   done
 }
 
+# Install the lane's routing table into ~/.claude/CLAUDE.md as a managed block.
+install_routing() {
+  local src="$1" target="$HOME/.claude/CLAUDE.md" tmp
+  local start='<!-- claude-brain:routing:start -->' end='<!-- claude-brain:routing:end -->'
+  mkdir -p "$HOME/.claude"
+  tmp="$(mktemp)"
+  if [ -f "$target" ]; then
+    awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target" > "$tmp"
+  fi
+  { printf '%s\n' "$start"; cat "$src"; printf '%s\n' "$end"; } >> "$tmp"
+  mv "$tmp" "$target"
+}
+
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
 step_todo() { printf '  %s %s\n' "${C_YELLOW}[    ]${C_RESET}" "$1"; }
 
@@ -43,6 +56,7 @@ cmd_rc() {
   need tmux
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   install_agents "$AGENTS_RC_SRC"
+  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
   if ! tmux has-session -t brain-rc 2>/dev/null; then
     info "starting your brain session (tmux: brain-rc)"
     info "inside Claude, run /remote-control once to link your phone / claude.ai"
@@ -59,6 +73,7 @@ cmd_multi() {
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   proxy_ready || die "proxy is not healthy — check: brain status"
   install_agents "$AGENTS_MULTI_SRC"
+  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-multi.md"
   local token
   token="$(brain_token)"
   info "starting multi-model session (tmux: brain-multi) — no phone control in this mode"

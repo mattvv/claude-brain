@@ -12,6 +12,19 @@ for tool in brain brain-ask brain-proxy-build; do
   ln -sf "$REPO_DIR/droplet/bin/$tool" "$HOME/.local/bin/$tool"
 done
 
+# Register the model-guard hook (blocks delegation to unlinked vendors).
+chmod 755 "$REPO_DIR/droplet/claude/hooks/model-guard.sh"
+if command -v jq >/dev/null 2>&1; then
+  SETTINGS="$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude"
+  [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  HOOK_CMD="$REPO_DIR/droplet/claude/hooks/model-guard.sh"
+  jq --arg cmd "$HOOK_CMD" '
+    .hooks.PreToolUse = ([.hooks.PreToolUse[]? | select((.hooks[]?.command // "") | test("model-guard") | not)]
+      + [{matcher: "Agent|Task", hooks: [{type: "command", command: $cmd}]}])
+  ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+fi
+
 # Ensure ~/.local/bin is on PATH for interactive shells.
 if ! grep -Fq '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
   printf '\n# Added by claude-brain\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
