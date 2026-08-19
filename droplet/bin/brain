@@ -610,6 +610,7 @@ cmd_expose() {
 # Live consultation progress. Shared by the progress hook, the statusline, and
 # anyone tailing by hand, so all three report identical state.
 cmd_consult() {
+  local think
   case "${1:-status}" in
     status)
       if line="$(consult_progress_line)"; then
@@ -626,8 +627,14 @@ cmd_consult() {
       [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
       tail -f "$(readlink -f "$BRAIN_CONSULT_LINK")"
       ;;
+    think)
+      [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
+      think="$(readlink -f "$BRAIN_CONSULT_LINK").thinking"
+      [ -f "$think" ] || die "no reasoning captured for this consultation"
+      tail -f "$think"
+      ;;
     *)
-      die "usage: brain consult [status|log|watch]"
+      die "usage: brain consult [status|log|watch|think]"
       ;;
   esac
 }

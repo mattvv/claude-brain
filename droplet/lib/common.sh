@@ -112,17 +112,33 @@ consult_active() {
   [ $((now - mtime)) -le 45 ]
 }
 
+# Latest reasoning-summary step from the `.thinking` sidecar, if any. Codex
+# emits these as `**Bolded step**` headers, which read well as progress.
+consult_thinking_step() {
+  local t step
+  t="$(readlink -f "$BRAIN_CONSULT_LINK" 2>/dev/null || true).thinking"
+  [ -f "$t" ] || return 0
+  step="$(grep -o '\*\*[^*]\+\*\*' "$t" 2>/dev/null | tail -1 | tr -d '*')"
+  [ ${#step} -le 64 ] || step="${step:0:61}..."
+  printf '%s' "$step"
+}
+
 # One-line progress summary for the current consultation. Returns 1 when idle.
-# xhigh models emit nothing for minutes, so the 0-byte case is reported
-# explicitly rather than looking like a hang.
+# xhigh models emit no answer text for minutes, so that window reports the live
+# reasoning step instead — and falls back to a plain notice before one exists.
 consult_progress_line() {
   consult_active || return 1
-  local target name bytes heading
+  local target name bytes heading step
   target="$(basename "$(readlink -f "$BRAIN_CONSULT_LINK")")"
   name="${target%-*.log}"
   bytes="$(stat -Lc %s "$BRAIN_CONSULT_LINK" 2>/dev/null || echo 0)"
+  step="$(consult_thinking_step)"
   if [ "$bytes" -eq 0 ]; then
-    printf '%s · thinking, no output yet\n' "$name"
+    if [ -n "$step" ]; then
+      printf '%s · thinking: %s\n' "$name" "$step"
+    else
+      printf '%s · thinking, no output yet\n' "$name"
+    fi
     return 0
   fi
   heading="$(grep -o '^#\+ .*' "$BRAIN_CONSULT_LINK" 2>/dev/null | tail -1 | sed 's/^#\+ *//')"
