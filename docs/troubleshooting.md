@@ -52,23 +52,21 @@ brain-proxy-build --force
 
 Some ChatGPT accounts won't accept the device-code login even after enabling
 **Settings → Security → Device code authorization** (plan and workspace restrictions
-apply, and the toggle can take a while to stick). The reliable fallback is to log in
-where a browser works and copy the credential to the brain:
+apply, and the toggle can take a while to stick). The fallback is the normal
+browser login, tunneled so your laptop's browser can complete it. On your **laptop**, run:
 
-1. On your laptop, produce a working Codex credential — if you use
-   [Parable](https://parable.sh), you already have one in `~/.cli-proxy-api/`.
-2. Copy it to the droplet (it stays owner-only on both ends):
+```bash
+ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc "brain auth chatgpt --browser"'
+```
 
-   ```bash
-   scp -p ~/.cli-proxy-api/codex-*.json claude-brain:.cli-proxy-api/
-   ssh claude-brain 'chmod 600 ~/.cli-proxy-api/codex-*.json && systemctl --user restart cli-proxy-api'
-   ```
+It prints a URL — open it in your laptop's browser and sign in. The login's callback
+comes back through the SSH tunnel to the droplet and the credential lands there
+directly. Verify from the droplet: `brain-ask gpt-5.6-luna "say ok"`.
 
-3. Verify from the droplet: `brain-ask gpt-5.6-luna "say ok"`.
-
-The router refreshes the credential itself from then on. The same trick works for any
-vendor record (`xai-*.json`, `kimi-*.json`). Note the copied login is then live in two
-places — remove one copy if that bothers you.
+(If you already have a working credential from another CLIProxyAPI-based setup, copying
+its `codex-*.json` into the droplet's `~/.cli-proxy-api/` and restarting the router with
+`systemctl --user restart cli-proxy-api` also works — the router refreshes it from then
+on. But then the login is live in two places.)
 
 ## `ssh claude-brain` says "Permission denied (publickey)"
 

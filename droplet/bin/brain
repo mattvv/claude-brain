@@ -243,10 +243,11 @@ cmd_auth_start() {
 
   info "open this link in any browser and approve:"
   printf '\n  %s\n\n' "$url"
-  if [ "$vendor" = chatgpt ]; then
+  if [ "$vendor" = chatgpt ] || printf '%s' "$url" | grep -qi device; then
+    # Device-style flow: completes on its own once approved.
     grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log" | head -1 \
       | sed 's/^/  device code: /' || true
-    info "then run: brain auth check chatgpt"
+    info "then run: brain auth check $vendor"
   else
     info "after approving, the browser lands on a localhost address that won't load —"
     info "copy that address and run: brain auth paste $vendor '<that-url>'"
@@ -299,8 +300,21 @@ cmd_auth() {
       ;;
     chatgpt)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
-      info "ChatGPT device login: you'll get a URL + code to enter on any browser"
-      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --codex-device-login
+      if [ "${2:-}" = "--browser" ]; then
+        # Browser OAuth whose callback lands on localhost:1455 of the machine
+        # running THIS command. Run it from your laptop with the port forwarded:
+        #   ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc "brain auth chatgpt --browser"'
+        if [ -z "${SSH_CONNECTION:-}" ] || ! ss -ltn 2>/dev/null | grep -q ':1455'; then
+          warn "reminder: this only works when localhost:1455 is forwarded from the"
+          warn "machine whose browser you'll use, e.g. from your laptop:"
+          warn "  ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc \"brain auth chatgpt --browser\"'"
+        fi
+        "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --codex-login --no-browser
+      else
+        info "ChatGPT device login: you'll get a URL + code to enter on any browser"
+        info "(if ChatGPT refuses device codes, use: brain auth chatgpt --browser)"
+        "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --codex-device-login
+      fi
       ;;
     grok)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
