@@ -420,18 +420,14 @@ cmd_setup() {
 
   # 5. vendor logins
   info "step 5/7: link your other AI accounts (each optional — Enter to accept, n to skip)"
-  local rec
-  rec="$(ls "$BRAIN_AUTH_DIR"/codex-*.json 2>/dev/null | head -1)"
-  if [ -n "$rec" ]; then step_done "ChatGPT linked"; else
-    ask_yn "  Link a ChatGPT account (for GPT models)?" && cmd_auth chatgpt || true
+  if vendor_linked chatgpt; then step_done "ChatGPT linked"; else
+    if ask_yn "  Link a ChatGPT account (for GPT models)?"; then cmd_auth chatgpt || warn "ChatGPT login didn't finish — retry later: brain auth chatgpt"; fi
   fi
-  rec="$(ls "$BRAIN_AUTH_DIR"/xai-*.json 2>/dev/null | head -1)"
-  if [ -n "$rec" ]; then step_done "Grok linked"; else
-    ask_yn "  Link a Grok (X.AI) account?" && cmd_auth grok || true
+  if vendor_linked grok; then step_done "Grok linked"; else
+    if ask_yn "  Link a Grok (X.AI) account?"; then cmd_auth grok || warn "Grok login didn't finish — retry later: brain auth grok"; fi
   fi
-  rec="$(ls "$BRAIN_AUTH_DIR"/kimi-*.json 2>/dev/null | head -1)"
-  if [ -n "$rec" ]; then step_done "Kimi linked"; else
-    ask_yn "  Link a Kimi account?" && cmd_auth kimi || true
+  if vendor_linked kimi; then step_done "Kimi linked"; else
+    if ask_yn "  Link a Kimi account?"; then cmd_auth kimi || warn "Kimi login didn't finish — retry later: brain auth kimi"; fi
   fi
 
   # 6. GitHub
