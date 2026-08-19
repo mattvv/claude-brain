@@ -96,6 +96,41 @@ proxy_models() {
     "$BRAIN_PROXY_URL/v1/models" | jq -r '.data[].id'
 }
 
+# ---- consultation progress (shared by the statusline, hooks, and `brain consult`) ----
+
+BRAIN_CONSULT_DIR="$BRAIN_STATE_DIR/consult"
+BRAIN_CONSULT_LINK="$BRAIN_CONSULT_DIR/current"
+
+# True while a `brain-ask --stream` consultation is running, or finished within
+# the last 45s so the completion stays visible for one more poll.
+consult_active() {
+  [ -e "$BRAIN_CONSULT_LINK" ] || return 1
+  pgrep -f 'brain-ask ' >/dev/null 2>&1 && return 0
+  local now mtime
+  now="$(date +%s)"
+  mtime="$(stat -Lc %Y "$BRAIN_CONSULT_LINK" 2>/dev/null || echo 0)"
+  [ $((now - mtime)) -le 45 ]
+}
+
+# One-line progress summary for the current consultation. Returns 1 when idle.
+# xhigh models emit nothing for minutes, so the 0-byte case is reported
+# explicitly rather than looking like a hang.
+consult_progress_line() {
+  consult_active || return 1
+  local target name bytes heading
+  target="$(basename "$(readlink -f "$BRAIN_CONSULT_LINK")")"
+  name="${target%-*.log}"
+  bytes="$(stat -Lc %s "$BRAIN_CONSULT_LINK" 2>/dev/null || echo 0)"
+  if [ "$bytes" -eq 0 ]; then
+    printf '%s · thinking, no output yet\n' "$name"
+    return 0
+  fi
+  heading="$(grep -o '^#\+ .*' "$BRAIN_CONSULT_LINK" 2>/dev/null | tail -1 | sed 's/^#\+ *//')"
+  local size
+  if [ "$bytes" -lt 1024 ]; then size="${bytes}B"; else size="$((bytes / 1024))kB"; fi
+  printf '%s · %s%s\n' "$name" "$size" "${heading:+ · writing: $heading}"
+}
+
 claude_bin() {
   if command -v claude >/dev/null 2>&1; then
     command -v claude

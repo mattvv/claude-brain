@@ -13,7 +13,8 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck -x -S warning setup.sh droplet/install.sh droplet/bin/brain \
-            droplet/bin/brain-ask droplet/bin/brain-proxy-build droplet/lib/common.sh
+            droplet/bin/brain-ask droplet/bin/brain-proxy-build droplet/lib/common.sh \
+            droplet/claude/statusline.sh droplet/claude/hooks/*.sh
       - name: cloud-init schema
         run: |
           sudo apt-get install -y cloud-init

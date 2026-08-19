@@ -12,16 +12,28 @@ for tool in brain brain-ask brain-proxy-build; do
   ln -sf "$REPO_DIR/droplet/bin/$tool" "$HOME/.local/bin/$tool"
 done
 
-# Register the model-guard hook (blocks delegation to unlinked vendors).
-chmod 755 "$REPO_DIR/droplet/claude/hooks/model-guard.sh"
+# Register the Claude Code integration: model guard, consultation progress
+# hooks, and the statusline. All three are keyed by script name so re-running
+# install.sh replaces them rather than accumulating duplicates.
+HOOKS_DIR="$REPO_DIR/droplet/claude/hooks"
+chmod 755 "$HOOKS_DIR"/*.sh "$REPO_DIR/droplet/claude/statusline.sh"
 if command -v jq >/dev/null 2>&1; then
   SETTINGS="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  HOOK_CMD="$REPO_DIR/droplet/claude/hooks/model-guard.sh"
-  jq --arg cmd "$HOOK_CMD" '
-    .hooks.PreToolUse = ([.hooks.PreToolUse[]? | select((.hooks[]?.command // "") | test("model-guard") | not)]
-      + [{matcher: "Agent|Task", hooks: [{type: "command", command: $cmd}]}])
+  MANAGED='model-guard|consult-poll-guard|consult-progress'
+  jq --arg hooks "$HOOKS_DIR" \
+     --arg statusline "$REPO_DIR/droplet/claude/statusline.sh" \
+     --arg managed "$MANAGED" '
+    def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
+    .hooks.PreToolUse = (strip(.hooks.PreToolUse) + [
+      {matcher: "Agent|Task", hooks: [{type: "command", command: ($hooks + "/model-guard.sh")}]},
+      {matcher: "Bash",       hooks: [{type: "command", command: ($hooks + "/consult-poll-guard.sh")}]}
+    ])
+    | .hooks.PostToolUse = (strip(.hooks.PostToolUse) + [
+      {matcher: "*", hooks: [{type: "command", command: ($hooks + "/consult-progress.sh")}]}
+    ])
+    | .statusLine = {type: "command", command: $statusline, refreshInterval: 2}
   ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 fi
 

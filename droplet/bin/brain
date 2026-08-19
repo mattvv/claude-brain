@@ -14,6 +14,7 @@
 #   brain setup      first-time onboarding wizard (resumable)
 #   brain config     settings: consult foreground|background (watch brain-*
 #                    consultants work live, or run them in the background)
+#   brain consult    live consultation progress: status | log | watch
 #   brain update     pull latest claude-brain + rebuild what changed
 #   brain help       this text
 
@@ -606,6 +607,31 @@ cmd_expose() {
 }
 
 # ------------------------------------------------------------------- config
+# Live consultation progress. Shared by the progress hook, the statusline, and
+# anyone tailing by hand, so all three report identical state.
+cmd_consult() {
+  case "${1:-status}" in
+    status)
+      if line="$(consult_progress_line)"; then
+        printf '%s\n' "$line"
+      else
+        printf 'idle\n'
+      fi
+      ;;
+    log)
+      [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
+      readlink -f "$BRAIN_CONSULT_LINK"
+      ;;
+    watch)
+      [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
+      tail -f "$(readlink -f "$BRAIN_CONSULT_LINK")"
+      ;;
+    *)
+      die "usage: brain consult [status|log|watch]"
+      ;;
+  esac
+}
+
 cmd_config() {
   local key="${1:-}" val="${2:-}"
   case "$key" in
@@ -660,8 +686,9 @@ case "${1:-rc}" in
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
+  consult)   shift; cmd_consult "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
