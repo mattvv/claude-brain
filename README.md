@@ -111,6 +111,7 @@ private network — no ports ever open to the internet:
 | Command | What it does |
 |---|---|
 | `brain` | Start/attach the phone-control server (spawn as many sessions as you like from the app) |
+| `brain repo add <owner/name>` | Clone one of your GitHub repos and serve phone sessions for it (`repo ls` / `repo serve` / `repo stop`) — or just ask your brain to do it |
 | `brain status` | Health check: router, linked accounts, sessions |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |

@@ -2,6 +2,8 @@
 # claude-brain droplet CLI.
 #
 #   brain            attach/create the Remote Control session (default)
+#   brain repo add X clone a GitHub repo and serve phone sessions for it
+#                    (also: repo ls | repo serve <name> | repo stop <name>)
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: proxy, logins, sessions
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
@@ -75,23 +77,103 @@ check_for_updates() {
 }
 
 # ---------------------------------------------------------------- rc session
-cmd_rc() {
-  need tmux
+WORKSPACE_DIR="$HOME/workspace"
+REPOS_DIR="$HOME/repos"
+
+# The RC server refuses untrusted (and home) directories; pre-accept the
+# workspace trust dialog for a project directory.
+seed_trust() {
+  local dir="$1"
+  [ -s "$HOME/.claude.json" ] || echo '{}' > "$HOME/.claude.json"
+  jq --arg d "$dir" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' \
+    "$HOME/.claude.json" > "$HOME/.claude.json.tmp" && mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
+}
+
+# Start (or attach to) a persistent Remote Control server for a directory.
+# Sessions spawn on demand from the Claude app / claude.ai/code (capacity 32).
+# RC needs api.anthropic.com, so any proxy override is scrubbed.
+rc_server() {
+  local dir="$1" tmux_name="$2" prefix="$3"
+  need tmux jq
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
-  check_for_updates
   install_agents "$AGENTS_RC_SRC"
   install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
-  if ! tmux has-session -t brain-rc 2>/dev/null; then
-    info "starting the Remote Control server (tmux: brain-rc)"
-    info "open the Claude app (Code tab) or claude.ai/code to start sessions here"
-    sleep 1
+  seed_trust "$dir"
+  if ! tmux has-session -t "$tmux_name" 2>/dev/null; then
+    info "starting Remote Control server for $dir (tmux: $tmux_name)"
+    info "open the Claude app (Code tab) or claude.ai/code to start sessions there"
   fi
-  # A persistent Remote Control server: sessions spawn on demand from the
-  # phone/claude.ai (capacity 32). RC needs api.anthropic.com, so scrub any
-  # proxy override before launching.
-  exec tmux new-session -A -s brain-rc \
-    "env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
-       $(claude_bin) remote-control --remote-control-session-name-prefix brain; exec bash"
+  local launch
+  launch="cd '$dir' && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
+    $(claude_bin) remote-control --spawn same-dir --remote-control-session-name-prefix '$prefix'; exec bash"
+  if [ -t 0 ]; then
+    exec tmux new-session -A -s "$tmux_name" "$launch"
+  else
+    # No terminal (e.g. invoked by a Claude session): run the server detached.
+    tmux has-session -t "$tmux_name" 2>/dev/null || tmux new-session -d -s "$tmux_name" "$launch"
+    ok "server running detached (attach later: tmux attach -t $tmux_name)"
+  fi
+}
+
+cmd_rc() {
+  check_for_updates
+  mkdir -p "$WORKSPACE_DIR"
+  git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1 || git -C "$WORKSPACE_DIR" init -q
+  rc_server "$WORKSPACE_DIR" brain-rc brain
+}
+
+# -------------------------------------------------------------------- repos
+# Each repo gets its own Remote Control server, so the phone/claude.ai shows
+# per-repo places to start sessions.
+cmd_repo() {
+  local sub="${1:-ls}" arg="${2:-}"
+  case "$sub" in
+    add)
+      [ -n "$arg" ] || die "usage: brain repo add <owner/name | git-url> [name]"
+      need git jq
+      local name="${3:-}"
+      [ -n "$name" ] || { name="${arg##*/}"; name="${name%.git}"; }
+      mkdir -p "$REPOS_DIR"
+      local dir="$REPOS_DIR/$name"
+      if [ ! -d "$dir" ]; then
+        info "cloning $arg into $dir"
+        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+          gh repo clone "$arg" "$dir"
+        else
+          git clone "$arg" "$dir"
+        fi
+      else
+        step_done "already cloned: $dir"
+      fi
+      rc_server "$dir" "brain-rc-$name" "$name"
+      ;;
+    serve)
+      [ -n "$arg" ] || die "usage: brain repo serve <name>"
+      [ -d "$REPOS_DIR/$arg" ] || die "no such repo: $REPOS_DIR/$arg (see: brain repo ls)"
+      rc_server "$REPOS_DIR/$arg" "brain-rc-$arg" "$arg"
+      ;;
+    stop)
+      [ -n "$arg" ] || die "usage: brain repo stop <name>"
+      tmux kill-session -t "brain-rc-$arg" 2>/dev/null \
+        && ok "stopped server for $arg" || warn "no server running for $arg"
+      ;;
+    ls)
+      local d name
+      printf '%s\n' "${C_BOLD}repos${C_RESET}"
+      for d in "$REPOS_DIR"/*/; do
+        [ -d "$d" ] || { warn "none yet — add one: brain repo add <owner/name>"; return 0; }
+        name="$(basename "$d")"
+        if tmux has-session -t "brain-rc-$name" 2>/dev/null; then
+          ok "$name (serving — sessions available in the app)"
+        else
+          step_todo "$name (stopped — start: brain repo serve $name)"
+        fi
+      done
+      ;;
+    *)
+      die "usage: brain repo <add|serve|stop|ls>"
+      ;;
+  esac
 }
 
 # ------------------------------------------------------------- multi session
@@ -532,9 +614,10 @@ case "${1:-rc}" in
   multi)     cmd_multi ;;
   status)    cmd_status ;;
   expose)    shift; cmd_expose "$@" ;;
+  repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac

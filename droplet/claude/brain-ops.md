@@ -32,6 +32,12 @@ with the Bash tool and relay the URL to the user in chat:
   in the background, relay the printed approval URL to the user (they need the Tailscale
   app on their phone — tailscale.com/download), and confirm with `brain status`.
 
+**Set up repos for phone sessions**: when the user wants to work on one of their
+repositories, run `brain repo add <owner/name>` (clones with their linked GitHub account
+and starts a Remote Control server for that repo — its sessions then appear in their
+Claude app). `brain repo ls` shows what's set up; `brain repo stop <name>` ends one.
+Run these detached (the server lives in tmux), then confirm with `brain repo ls`.
+
 **Update claude-brain yourself**: `brain update` pulls the latest release, refreshes
 agents/hooks/routing, and restarts the router. Safe to run mid-session; a new Claude
 binary applies on the next session restart. The `brain` launcher also checks for updates
