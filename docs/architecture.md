@@ -28,8 +28,11 @@ phone/app ◄── Remote Control ──► claude (native Anthropic auth, tmux
                                             xAI / OpenAI / Moonshot / Anthropic
 ```
 
-- The session is launched with `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`
-  explicitly scrubbed from the environment, so Remote Control always works.
+- `brain` runs `claude remote-control` as a persistent server under tmux: one session is
+  pre-created, and more spawn on demand from the Claude app / claude.ai/code (capacity 32,
+  same-dir spawn mode; worktree isolation is a runtime toggle). It launches with
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` explicitly scrubbed from
+  the environment, so Remote Control always works.
 - The brain is always Claude. Other models are **consultants**: bridge agents
   (`droplet/claude/agents-rc/`) read the needed files, compose one self-contained prompt,
   and call the local router with the `brain-ask` CLI (`POST /v1/messages`, Anthropic wire

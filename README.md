@@ -74,12 +74,12 @@ Everything is skippable and re-runnable: `brain auth chatgpt`, `brain auth githu
 
 ## Step 4 — your first phone session
 
-1. On the droplet, run `brain`. Claude starts inside a persistent session.
-2. Type `/remote-control` inside Claude. It prints a link.
-3. Open the Claude app on your phone (or claude.ai/code) — your brain's session appears.
-   Attach, and drive it from anywhere.
+1. On the droplet, run `brain`. This starts a persistent Remote Control server —
+   one session is ready immediately, and you can spawn more whenever you like.
+2. Open the Claude app on your phone (**Code** tab), or claude.ai/code in any browser.
+   Your brain's sessions appear there — attach to one, or start a new one, from anywhere.
 
-Close your laptop; the session keeps running on the droplet.
+Close your laptop; everything keeps running on the droplet.
 
 Want a second opinion from another model mid-conversation? Just ask — e.g. *"have
 brain-grok double-check this"* or *"ask brain-sol to review this diff"*. Claude delegates
@@ -110,7 +110,7 @@ private network — no ports ever open to the internet:
 
 | Command | What it does |
 |---|---|
-| `brain` | Start/attach your main session (the one with phone control) |
+| `brain` | Start/attach the phone-control server (spawn as many sessions as you like from the app) |
 | `brain status` | Health check: router, linked accounts, sessions |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |

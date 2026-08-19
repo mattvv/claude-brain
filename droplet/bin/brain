@@ -82,13 +82,16 @@ cmd_rc() {
   install_agents "$AGENTS_RC_SRC"
   install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
   if ! tmux has-session -t brain-rc 2>/dev/null; then
-    info "starting your brain session (tmux: brain-rc)"
-    info "inside Claude, run /remote-control once to link your phone / claude.ai"
+    info "starting the Remote Control server (tmux: brain-rc)"
+    info "open the Claude app (Code tab) or claude.ai/code to start sessions here"
     sleep 1
   fi
-  # RC needs api.anthropic.com: scrub any proxy override before launching.
+  # A persistent Remote Control server: sessions spawn on demand from the
+  # phone/claude.ai (capacity 32). RC needs api.anthropic.com, so scrub any
+  # proxy override before launching.
   exec tmux new-session -A -s brain-rc \
-    "env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY $(claude_bin); exec bash"
+    "env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
+       $(claude_bin) remote-control --remote-control-session-name-prefix brain; exec bash"
 }
 
 # ------------------------------------------------------------- multi session
