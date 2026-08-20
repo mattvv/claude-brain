@@ -136,6 +136,19 @@ def main():
 
     models = sorted({p[1].get("provider_model") or "?" for p in pairs})
     print("provider model(s): %s" % ", ".join(models))
+    truncated = {
+        arm: sum(
+            1 for _, c, g in pairs
+            if (c if arm == "control" else g).get("stop_reason") == "max_tokens"
+        )
+        for arm in ("control", "guarded")
+    }
+    if truncated["control"] or truncated["guarded"]:
+        print(
+            "truncated (max_tokens) calls: control %d, guarded %d — a truncated"
+            % (truncated["control"], truncated["guarded"])
+        )
+        print("control call understates the true output delta (conservative).")
     print()
     print("overall")
     print(describe("all categories", pairs))
@@ -163,6 +176,7 @@ def main():
     report = {
         "pairs": len(pairs),
         "dropped": len(dropped),
+        "truncated_calls": truncated,
         "claim_threshold": CLAIM_THRESHOLD,
         "claimable": len(pairs) >= CLAIM_THRESHOLD,
         "overall": stats_json(pairs),
