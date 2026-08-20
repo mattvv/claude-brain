@@ -88,18 +88,22 @@ async fn run_inner(rest: Vec<String>) -> Result<i32, String> {
         return Err("compression subsystem is disabled (kill switch)".to_string());
     }
     let config = Config::load(&state)?;
-    let model = args
-        .model
-        .clone()
-        .unwrap_or_else(|| config.explore_model.clone());
-    if model.to_lowercase().contains("claude")
-        || model.to_lowercase().contains("opus")
-        || model.to_lowercase().contains("sonnet")
-        || model.to_lowercase().contains("haiku")
-        || model.to_lowercase().contains("fable")
-    {
-        return Err(format!("refusing to explore with a Claude-family model ({model})"));
+    // Model fallback chain: an explicit --model overrides to a single model;
+    // otherwise use the configured chain and fall through on failure.
+    let models: Vec<String> = match &args.model {
+        Some(m) => vec![m.clone()],
+        None => config.explore_models.clone(),
+    };
+    if models.is_empty() {
+        return Err("no explore model configured (set [explore] model)".to_string());
     }
+    for model in &models {
+        let lower = model.to_lowercase();
+        if ["claude", "opus", "sonnet", "haiku", "fable"].iter().any(|f| lower.contains(f)) {
+            return Err(format!("refusing to explore with a Claude-family model ({model})"));
+        }
+    }
+    let primary = &models[0];
 
     // 1. Deterministic gather (no model).
     let tokens = identifier_tokens(&args.question);
@@ -123,7 +127,7 @@ async fn run_inner(rest: Vec<String>) -> Result<i32, String> {
     let store = ArtifactStore::new(&state, config.artifact_ttl_days, config.artifact_quota_bytes)?;
     let metadata = ArtifactMetadata {
         source_event_id: Some(unique_id("explore")),
-        model: Some(model.clone()),
+        model: Some(primary.clone()),
         surface: Some(SURFACE_FILES.to_string()),
         claim_saved_bytes: 0,
     };
@@ -133,13 +137,16 @@ async fn run_inner(rest: Vec<String>) -> Result<i32, String> {
         .map_err(|e| format!("cannot persist explore pack: {e}"))?;
 
     println!(
-        "[brain-explore model={model} pack={}B files={included} omitted={omitted} id={handle}]",
+        "[brain-explore models={} pack={}B files={included} omitted={omitted} id={handle}]",
+        models.join(","),
         pack.len(),
     );
     println!("[discovery only — verify cited lines before editing; pack: brain compress show {handle} --full]");
 
     // 3. One consult through the normal ask path (its ledger entry carries the
-    //    provider ground-truth cost of this feature).
+    //    provider ground-truth cost of this feature). Walk the fallback chain:
+    //    try each model in order, moving on when a call fails (vendor not linked,
+    //    transport/HTTP error). A successful consult short-circuits.
     let system_path = match std::env::var("BRAIN_EXPLORE_SYSTEM") {
         Ok(path) => PathBuf::from(path),
         Err(_) => {
@@ -149,19 +156,36 @@ async fn run_inner(rest: Vec<String>) -> Result<i32, String> {
         }
     };
     let prompt = format!("QUESTION: {}\n\n{pack}", args.question);
-    let ask_args = vec![
-        model,
-        "--system".to_string(),
-        system_path.display().to_string(),
-        "--effort".to_string(),
-        config.explore_effort.clone(),
-        "--max-tokens".to_string(),
-        "2000".to_string(),
-        prompt,
-    ];
-    let code = crate::ask::run(ask_args).await;
-    println!();
-    Ok(code)
+    let mut last_code = 1;
+    for (idx, model) in models.iter().enumerate() {
+        if idx > 0 {
+            eprintln!(
+                "brain explore: {} unavailable — falling back to {model}",
+                models[idx - 1]
+            );
+        }
+        let ask_args = vec![
+            model.clone(),
+            "--system".to_string(),
+            system_path.display().to_string(),
+            "--effort".to_string(),
+            config.explore_effort.clone(),
+            "--max-tokens".to_string(),
+            "2000".to_string(),
+            prompt.clone(),
+        ];
+        let code = crate::ask::run(ask_args).await;
+        if code == 0 {
+            println!();
+            return Ok(0);
+        }
+        last_code = code;
+    }
+    eprintln!(
+        "brain explore: all configured models failed ({})",
+        models.join(", ")
+    );
+    Ok(last_code)
 }
 
 /// Identifier-like tokens from the question (>=3 chars, not stopwords).

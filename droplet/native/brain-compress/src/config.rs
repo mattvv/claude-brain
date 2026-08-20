@@ -26,9 +26,11 @@ pub struct Config {
     /// results within the scope window become references to the earlier view.
     pub dedup_enabled: bool,
     pub dedup_window_hours: u64,
-    /// Cheap-model repository navigation (design §2). The model must never be
-    /// a Claude-family model; explore.rs enforces that too.
-    pub explore_model: String,
+    /// Cheap-model repository navigation (design §2). An ordered fallback chain:
+    /// explore tries each in turn and falls to the next when a model's vendor is
+    /// not linked or the call fails. None may be a Claude-family model;
+    /// explore.rs enforces that too.
+    pub explore_models: Vec<String>,
     pub explore_effort: String,
     pub explore_max_pack_bytes: u64,
     /// Cap on rows printed by `brain compress refs` (full result persisted).
@@ -57,7 +59,7 @@ impl Config {
             large_file_bytes: 48 * 1024,
             dedup_enabled: true,
             dedup_window_hours: 8,
-            explore_model: "gpt-5.6-luna".to_string(),
+            explore_models: vec!["gpt-5.6-luna".to_string(), "grok-4.5".to_string()],
             explore_effort: "low".to_string(),
             explore_max_pack_bytes: 96 * 1024,
             symbols_max_results: 200,
@@ -182,7 +184,23 @@ impl Config {
                         )
                     })?;
                 }
-                "explore.model" => config.explore_model = unquote(value),
+                // Ordered fallback chain, comma-separated. `explore.model` is
+                // kept as an alias so a single value still works.
+                "explore.models" | "explore.model" => {
+                    let chain: Vec<String> = unquote(value)
+                        .split(',')
+                        .map(|m| m.trim().to_string())
+                        .filter(|m| !m.is_empty())
+                        .collect();
+                    if chain.is_empty() {
+                        return Err(format!(
+                            "{}:{}: explore.models needs at least one model",
+                            config.path.display(),
+                            line_number + 1
+                        ));
+                    }
+                    config.explore_models = chain;
+                }
                 "explore.effort" => config.explore_effort = unquote(value),
                 "explore.max_pack_bytes" => {
                     config.explore_max_pack_bytes = value.parse::<u64>().map_err(|error| {

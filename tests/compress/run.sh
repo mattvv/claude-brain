@@ -271,13 +271,22 @@ printf 'pub fn frobnicate(x: u32) -> u32 { x + 1 }\n' > "$EXROOT/src/frob.rs"
 printf 'use crate::frob;\nfn main() { frob::frobnicate(1); }\n' > "$EXROOT/src/main.rs"
 "$BIN" explore "where is frobnicate defined" --root "$EXROOT" --model ok-nonstream > "$WORK/ex.out" 2>"$WORK/ex.err" && RC=0 || RC=$?
 check "explore completes against fake proxy"  '[ "'"$RC"'" = "0" ] || [ "$RC" = "0" ]'
-check "explore header names model + pack id"  'grep -q "brain-explore model=ok-nonstream" "$WORK/ex.out"'
+check "explore header names model + pack id"  'grep -q "brain-explore models=ok-nonstream" "$WORK/ex.out"'
 check "explore is marked discovery-only"      'grep -q "discovery only" "$WORK/ex.out"'
 check "explore answer text present"           'grep -q "Hello world" "$WORK/ex.out"'
 EXID="$(grep -oE "id=bc_[A-Z0-9]+" "$WORK/ex.out" | head -1 | sed s/id=//)"
 check "explore pack persisted + recoverable"  '"$BIN" compress show "'"$EXID"'" --full 2>/dev/null | grep -q BRAIN_EXPLORE_PACK || "$BIN" compress show "$EXID" --full | grep -q BRAIN_EXPLORE_PACK'
 check "explore pack contains the source file" '"$BIN" compress show "$EXID" --full | grep -q "frob.rs"'
 check "explore refuses Claude models"         '! "$BIN" explore "x frobnicate" --root "$EXROOT" --model claude-fable >/dev/null 2>&1'
+# Model fallback chain: first model errors, explore falls through to a working one.
+printf '[explore]\nmodels = "http-500,ok-nonstream"\n' > "$BRAIN_STATE_DIR/compress/compress.toml"
+"$BIN" explore "where is frobnicate defined" --root "$EXROOT" > "$WORK/exfb.out" 2>"$WORK/exfb.err" && RC=0 || RC=$?
+check "explore falls back on model failure"   '[ "'"$RC"'" = "0" ] && grep -q "Hello world" "$WORK/exfb.out"'
+check "explore announces the fallback"        'grep -q "falling back to ok-nonstream" "$WORK/exfb.err"'
+printf '[explore]\nmodels = "http-500"\n' > "$BRAIN_STATE_DIR/compress/compress.toml"
+"$BIN" explore "frobnicate" --root "$EXROOT" >/dev/null 2>"$WORK/exall.err" && RC=0 || RC=$?
+check "explore reports all-models-failed"     '[ "'"$RC"'" != "0" ] && grep -q "all configured models failed" "$WORK/exall.err"'
+rm -f "$BRAIN_STATE_DIR/compress/compress.toml"
 
 
 echo "== symbols: refs + read --symbols =="
