@@ -148,11 +148,24 @@ What it does:
 - **Leaner file reads.** `brain compress read <file> --outline` (just the signatures),
   `--query '<goal>'` (matching regions), or `--lines A:B` instead of pulling a huge file whole.
 - **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
-  *paths* (`brain-ask --context-file`) so the file bytes never fill its own context twice, and
-  can request a terser answer (`--response review|debug|concise`).
+  *paths* (`brain-ask --context-file`) so the file bytes never fill the brain's *own* context
+  twice, and it can ask the consultant for a terser answer (`--response debug|concise|…`).
 - **Honest measurement.** `brain compress savings` reports three separate numbers —
   provider-reported ground truth, exact bytes saved, and a labelled token estimate — and never
   blends them into one inflated figure. `brain compress off` disables everything instantly.
+
+**Typical savings** (measured on this project, not advertised):
+
+- **Command & file output — the big, reliable win.** Verbose output shrinks **~60–95%** before
+  it reaches the model: a 20-line `git log` went 10,881 → ~320 bytes (~97%), a recursive `grep`
+  16,573 → 4,783 bytes (~71%). Every byte stays recoverable.
+- **Consultation answers — modest, task-dependent.** Asking a consultant for a task-matched
+  terse answer cut its *generated* output by roughly **15–25%** in a 30-call-per-arm A/B against
+  Grok-4.5 (best on debugging and config questions; the review/implementation phrasings need
+  tuning and are honestly reported as no-win today). Handing over file *paths* saves the brain
+  from re-holding those files in its own context — a separate, brain-side saving — though it adds
+  a little to what the consultant receives. `brain compress savings` shows all of this split into
+  honest classes; single-vendor caveats and the full A/B are in the docs below.
 
 The guarantee: **nothing is ever silently dropped.** Every compacted view carries a recovery
 handle, and errors, diffs, and anything about to be edited are never compressed. Under the
