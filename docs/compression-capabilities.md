@@ -178,3 +178,46 @@ NOT configured — it cannot help and any behavioral verification would burn rat
 Claude quota. Re-probe on each Claude Code upgrade: the moment the harness starts sending
 `context_management` edits (grep the bundle for `context_management:{` and
 `applied_edits`), token-map surface #8 becomes a config flip instead of a build.
+
+## H9 — Measured A/B savings, frozen corpus vs grok-4.5 (2026-08-19/20) ✅
+
+First end-to-end ground-truth measurement of the Stage 3/4A guards
+(`--response` profile + `--context-file` pack) via `tests/compress/ab/`:
+15 frozen fixtures x 2 reps x 2 arms = 60 grok-4.5 calls (30/arm — the plan's
+minimum claim threshold), randomized order, paired per fixture+rep. All 60
+succeeded; **0 truncated (max_tokens), 0 dropped pairs**. Raw evidence:
+`tests/compress/ab/results-archive/grok45-2026-08-19/`.
+
+Paired medians (guarded − control), bootstrap 95% CI on the absolute median:
+
+| Category (pairs) | output tokens/call | input tokens/call |
+|---|---|---|
+| **overall (30)** | **−545 (−20.0%), CI [−1209, +2]** | **+154 (+39.4%), CI [+25, +172]** |
+| debug (8) | −578 (−26.0%), CI [−4610, −487] | +94 (+22.0%) |
+| architecture (4) | −1877 (−54.9%), CI [−2645, +246] | +131 (+35.3%) |
+| config (6) | −382 (−18.3%), CI [−1826, +2] | +167 (+54.2%) |
+| implementation (6) | −182 abs (+4.6% median pct), CI [−2183, +1321] | +85 (+22.9%) |
+| review (6) | **+175 (+6.7%)**, CI [−1134, +7058] | +219 (+39.5%) |
+
+The same arms through the normal CLI (arm means from the per-arm rollup split):
+`brain compress savings` on the run's state dir reports control 30 calls,
+mean 429 in / 4,048 out vs guarded 30 calls, mean 511 in / 3,346 out —
+output −17.4%, input +19.1% per call.
+
+**What this honestly supports:**
+- **debug is the only category whose CI excludes zero** — the `debug` profile
+  reliably cuts generated tokens (−26% median) on grok-4.5. Architecture and
+  config point the same way but are underpowered (n=4/6).
+- **The `review` and `implementation` profiles do NOT cut grok-4.5 output**
+  (review trends positive: "report only findings, file:line each" appears to
+  make grok enumerate at length). Re-tune those profile instructions (P3
+  material) before claiming anything for them.
+- **Guarded costs real vendor input**: +154 tokens/call median — the context
+  pack's line-number prefixes, framing, and the profile instruction. The pack's
+  purpose is keeping file bytes out of the bridge's Claude transcript (the #1
+  surface), not saving vendor input; that transcript saving is accounted
+  separately as measured bytes. Per the accounting rules these numbers are
+  never netted against each other.
+- Single vendor (grok-4.5), small per-category n, output counts include grok's
+  reasoning tokens (high variance — the wide CIs are real). Re-run the same
+  frozen corpus against gpt-5.6-luna before generalizing across vendors.

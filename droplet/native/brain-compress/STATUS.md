@@ -97,3 +97,32 @@ Tests: 17/17 unit + 55/55 offline contract (`tests/compress/run.sh`). Zero warni
 - Stage 4B tree-sitter outlines — build risk on 1.9 GB; a lexical `--outline` ships instead.
 - Stage 5 threads / provider cache — H4 showed cache/continuation unverifiable on this proxy.
 - Stage 8 semantic summarization — off by default; increases total tokens for one-shot use.
+
+---
+
+# Measurement phase (next-plan P1 + P2): COMPLETE
+
+- **P1 — per-arm ground truth + frozen-corpus A/B.** `RollupCell` now splits
+  provider input/output tokens per experiment arm (control vs guarded); the
+  all-arm totals are unchanged and remain their sum. `brain compress savings`
+  prints per-arm per-call means and the guarded-vs-control delta once both arms
+  reach `accounting.minimum_claim_samples` (suppressed below it); `--json` gains
+  the per-arm fields plus a `claimable` flag. `tests/compress/ab/` holds 15
+  frozen fixtures, a randomized paired runner (control inlines context; guarded
+  uses `--response` + `--context-file`; resumable via `AB_TASKS_FILE`; refuses
+  Claude models), and a stdlib analyzer (paired medians, bootstrap 95% CIs,
+  per-arm truncation counts).
+- **Measured (grok-4.5, 30 calls/arm, 0 failures/truncations):** output
+  −545 tok/call median (−20.0%), input +154 (+39.4%) — only `debug`'s CI
+  excludes zero (−26%); `review`/`implementation` profiles don't cut grok
+  output and need re-tuning (P3). Full table + caveats:
+  docs/compression-capabilities.md **H9**; raw evidence:
+  tests/compress/ab/results-archive/grok45-2026-08-19/.
+- **P2 — server-side compaction probe:** Claude Code 2.1.235 does NOT expose it
+  (SDK layer supports `compact-2026-01-12`; harness never sends
+  `context_management.edits`, so the injectable beta header is inert). Nothing
+  wired, per the do-not-hand-roll rule. Details + re-probe recipe:
+  docs/compression-capabilities.md **H8**.
+- Tests: 18/18 unit (`cargo test`), 67/67 offline contract
+  (`tests/compress/run.sh`, incl. 12 new A/B-harness checks against the fake
+  proxy's deterministic `ab-model`). Zero warnings.
