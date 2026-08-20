@@ -24,7 +24,7 @@ can tell them what it means.
 Expect a silent window: at `--effort xhigh` the log stays at 0 bytes for several
 minutes while the model reasons. Say so explicitly — otherwise it reads as a hang.
 
-In a terminal session the statusline (`droplet/claude/statusline.sh`) already shows the
+In a terminal session the statusline (`host/claude/statusline.sh`) already shows the
 live tail; offer `brain consult watch` for the full stream.
 
 Long consultations exceed the 10-minute foreground Bash cap — launch them with

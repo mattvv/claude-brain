@@ -22,8 +22,8 @@ Async (tokio + reqwest) native binary. One binary, dispatched on argv[0]/subcomm
   is unreadable, checked before any other work.
 - `doctor` re-verifies Stage 0 facts at runtime (proxy reachable, usage present,
   cache absent per H4, rtk presence).
-- Glue: `droplet/bin/{brain-ask,brain-compress}` launchers (native preferred,
-  Bash fallback at `droplet/libexec/legacy/brain-ask`), `brain compress` dispatch,
+- Glue: `host/bin/{brain-ask,brain-compress}` launchers (native preferred,
+  Bash fallback at `host/libexec/legacy/brain-ask`), `brain compress` dispatch,
   `install.sh` builds+installs the binary and seeds `compress.toml`.
 
 ## Async design (per "always tokio, never block")
@@ -65,7 +65,7 @@ only — no re-run, no reliance on its unreliable tee). A mutate-only PreToolUse
   vitest, tsc). Everything else passes through untouched; complex commands with a
   compressible tool are logged for `brain compress discover`.
 - **12/12 unit tests**, **37/37 offline contract tests** (`tests/compress/run.sh`).
-- Glue: `droplet/claude/hooks/brain-compress-bash.sh` (fail-open launcher) wired into
+- Glue: `host/claude/hooks/brain-compress-bash.sh` (fail-open launcher) wired into
   `install.sh` in the same Bash matcher AFTER the deny-only consult-poll-guard — only one
   hook mutates, so no composite-mutation hazard.
 

@@ -550,7 +550,7 @@ mod tests {
         assert!(redact("password=hunter2 rest").contains("password=«redacted»"));
         assert!(redact("Authorization: Bearer AbCd1234EfGh5678IjKl9012MnOp3456Qr").contains("«redacted»"));
         // Ordinary prose and paths survive.
-        let clean = "run cargo test in droplet/native/brain-compress";
+        let clean = "run cargo test in host/native/brain-compress";
         assert_eq!(redact(clean), clean);
     }
 

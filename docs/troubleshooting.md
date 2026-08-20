@@ -115,3 +115,41 @@ brain auth grok
 
 From your laptop: `doctl compute droplet delete claude-brain`, then re-run the setup
 command from the README. Nothing on the droplet is precious — all logins can be redone.
+
+## Platform-specific
+
+**macOS: the brain didn't come back after a reboot.**
+A launchd *user agent* only runs once someone is logged in. On a dedicated Mac, turn on
+automatic login (System Settings → Users & Groups → Automatic login). Check with
+`brain autostart status`.
+
+**macOS: the router isn't running.**
+`launchctl kickstart -k gui/$(id -u)/sh.claude-brain.proxy`, then `brain status`. Logs are
+files, not a journal: `~/.local/state/brain/log/sh.claude-brain.proxy.log`.
+
+**macOS: `tailscale: command not found` but the app is installed.**
+The App Store build hides the CLI inside the bundle; claude-brain finds it there
+automatically. If you installed it that way and something still can't see it, use
+`/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
+
+**The machine keeps falling asleep.**
+`brain keepawake` — it prints the exact commands first. On macOS it only stops sleep while
+plugged in, so a laptop on battery will still sleep (deliberately).
+
+**Linux: services die when I log out.**
+`sudo loginctl enable-linger $USER`. `brain autostart enable` does this for you.
+
+**Arch: `pacman` couldn't find a package.**
+Refresh first (`sudo pacman -Sy`). The GitHub CLI is `github-cli`, not `gh`.
+
+**The installer says my distro is untested.**
+It still installs. Only macOS, Arch and Ubuntu/Debian are tested; if a package name is
+wrong on yours, install it by hand and re-run `install.sh --here`.
+
+**claude-brain took over my Claude Code statusline.**
+It shouldn't have — it only claims an unset one. `brain config statusline off` removes
+ours; your original settings are backed up at
+`~/.local/state/brain/settings.json.pre-brain`.
+
+**I want it off this machine.**
+`brain uninstall` (add `--purge` to delete state and linked credentials too).

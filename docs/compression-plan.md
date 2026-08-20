@@ -66,10 +66,10 @@ Ratios below are potential reduction of that specific surface, not a claim about
 
 ## 2.1 Components
 
-Put these in the planned `brain-native` crate. If that crate has not landed, create it under `droplet/native/brain-native/` and preserve the same module boundaries when the migration merges.
+Put these in the planned `brain-native` crate. If that crate has not landed, create it under `host/native/brain-native/` and preserve the same module boundaries when the migration merges.
 
 ```text
-droplet/native/brain-native/
+host/native/brain-native/
   src/
     applets/
       ask.rs
@@ -91,22 +91,22 @@ droplet/native/brain-native/
 Repository additions and modifications:
 
 ```text
-droplet/bin/brain-compress                    # rollback-capable launcher
-droplet/bin/brain                            # "compress" dispatch
-droplet/bin/brain-ask                        # launcher to native applet, Bash fallback retained
-droplet/lib/common.sh                        # state/config paths
-droplet/install.sh                           # binary, RTK, config, hooks, symlinks
-droplet/templates/compress.toml.tmpl
-droplet/claude/hooks/brain-pre-bash.sh       # stable launcher for composite Bash hook
-droplet/claude/hooks/brain-pre-file.sh       # optional oversized Read guard
-droplet/claude/hooks/brain-post-tool.sh      # silent telemetry only
-droplet/claude/agents-rc/brain-*.md           # use --context-file, never inline whole files
-droplet/claude/agents-multi/*.md             # same where applicable
-droplet/claude/routing-rc.md
-droplet/claude/brain-ops.md
-droplet/claude/consult-background.md
-droplet/claude/consult-foreground.md
-droplet/claude/statusline.sh
+host/bin/brain-compress                    # rollback-capable launcher
+host/bin/brain                            # "compress" dispatch
+host/bin/brain-ask                        # launcher to native applet, Bash fallback retained
+host/lib/common.sh                        # state/config paths
+host/install.sh                           # binary, RTK, config, hooks, symlinks
+host/templates/compress.toml.tmpl
+host/claude/hooks/brain-pre-bash.sh       # stable launcher for composite Bash hook
+host/claude/hooks/brain-pre-file.sh       # optional oversized Read guard
+host/claude/hooks/brain-post-tool.sh      # silent telemetry only
+host/claude/agents-rc/brain-*.md           # use --context-file, never inline whole files
+host/claude/agents-multi/*.md             # same where applicable
+host/claude/routing-rc.md
+host/claude/brain-ops.md
+host/claude/consult-background.md
+host/claude/consult-foreground.md
+host/claude/statusline.sh
 tests/compress/
 ```
 
@@ -263,7 +263,7 @@ Do not install two independently mutating Bash PreToolUse hooks and assume their
 Create one composite Bash hook:
 
 ```text
-droplet/claude/hooks/brain-pre-bash.sh
+host/claude/hooks/brain-pre-bash.sh
   -> brain-compress hook pre-bash
 ```
 
@@ -1015,15 +1015,15 @@ docs/compression-capabilities.md
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/*
-droplet/native/brain-native/src/applets/{ask,compress}.rs
-droplet/bin/brain
-droplet/bin/brain-ask
-droplet/bin/brain-compress
-droplet/lib/common.sh
-droplet/install.sh
-droplet/templates/compress.toml.tmpl
-droplet/claude/statusline.sh
+host/native/brain-native/src/compress/*
+host/native/brain-native/src/applets/{ask,compress}.rs
+host/bin/brain
+host/bin/brain-ask
+host/bin/brain-compress
+host/lib/common.sh
+host/install.sh
+host/templates/compress.toml.tmpl
+host/claude/statusline.sh
 tests/compress/artifact/
 tests/compress/fake-proxy/
 ```
@@ -1061,10 +1061,10 @@ tests/compress/fake-proxy/
 ### Files
 
 ```text
-droplet/install.sh
-droplet/claude/hooks/brain-pre-bash.sh
-droplet/native/brain-native/src/compress/{hook,shell}.rs
-droplet/templates/compress.toml.tmpl
+host/install.sh
+host/claude/hooks/brain-pre-bash.sh
+host/native/brain-native/src/compress/{hook,shell}.rs
+host/templates/compress.toml.tmpl
 tests/compress/shell/
 ```
 
@@ -1114,13 +1114,13 @@ tests/compress/shell/
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/response.rs
-droplet/bin/brain-ask
-droplet/claude/agents-rc/brain-*.md
-droplet/claude/agents-multi/*.md
-droplet/claude/consult-background.md
-droplet/claude/consult-foreground.md
-droplet/claude/statusline.sh
+host/native/brain-native/src/compress/response.rs
+host/bin/brain-ask
+host/claude/agents-rc/brain-*.md
+host/claude/agents-multi/*.md
+host/claude/consult-background.md
+host/claude/consult-foreground.md
+host/claude/statusline.sh
 tests/compress/responses/
 ```
 
@@ -1154,12 +1154,12 @@ tests/compress/responses/
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/{pack,thread,sensitive}.rs
-droplet/native/brain-native/src/applets/ask.rs
-droplet/claude/agents-rc/brain-*.md
-droplet/claude/agents-multi/*.md
-droplet/claude/routing-rc.md
-droplet/claude/brain-ops.md
+host/native/brain-native/src/compress/{pack,thread,sensitive}.rs
+host/native/brain-native/src/applets/ask.rs
+host/claude/agents-rc/brain-*.md
+host/claude/agents-multi/*.md
+host/claude/routing-rc.md
+host/claude/brain-ops.md
 tests/compress/packs/
 ```
 
@@ -1193,8 +1193,8 @@ tests/compress/packs/
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/outline.rs
-droplet/native/brain-native/Cargo.toml
+host/native/brain-native/src/compress/outline.rs
+host/native/brain-native/Cargo.toml
 tests/compress/outline/
 ```
 
@@ -1224,10 +1224,10 @@ tests/compress/outline/
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/thread.rs
-droplet/native/brain-native/src/compress/pack.rs
-droplet/native/brain-native/src/compress/ledger.rs
-droplet/claude/agents-rc/brain-*.md
+host/native/brain-native/src/compress/thread.rs
+host/native/brain-native/src/compress/pack.rs
+host/native/brain-native/src/compress/ledger.rs
+host/claude/agents-rc/brain-*.md
 tests/compress/threads/
 ```
 
@@ -1255,11 +1255,11 @@ tests/compress/threads/
 ### Files
 
 ```text
-droplet/native/brain-native/src/compress/{pack,outline}.rs
-droplet/claude/hooks/brain-pre-file.sh
-droplet/claude/routing-rc.md
-droplet/claude/brain-ops.md
-droplet/install.sh
+host/native/brain-native/src/compress/{pack,outline}.rs
+host/claude/hooks/brain-pre-file.sh
+host/claude/routing-rc.md
+host/claude/brain-ops.md
+host/install.sh
 tests/compress/file-tools/
 ```
 
@@ -1299,10 +1299,10 @@ Do not compress away safety or routing distinctions merely to hit a budget.
 ### Files
 
 ```text
-droplet/claude/routing-rc.md
-droplet/claude/brain-ops.md
-droplet/claude/consult-*.md
-droplet/claude/agents-rc/*.md
+host/claude/routing-rc.md
+host/claude/brain-ops.md
+host/claude/consult-*.md
+host/claude/agents-rc/*.md
 tests/compress/prompt-budgets/
 ```
 
@@ -1492,11 +1492,11 @@ then B (Headroom head-to-head), then A (Ponytail/Caveman as skills), then D (com
 
 - **Stage 0** (capability spike) — DONE. Results: docs/compression-capabilities.md.
 - **Stage 1** (native foundation + observe-only ledger) — DONE. Async tokio+reqwest crate
-  `droplet/native/brain-compress`; brain-ask drop-in; token-savings accounting.
+  `host/native/brain-compress`; brain-ask drop-in; token-savings accounting.
 - **Stage 2** (RTK-backed Bash compression) — DONE. `brain-compress shell` + PreToolUse
   hook; verified live (git log 10,881→185 B to the model, exact recovery). RTK used as a
   filter library via `rtk pipe` (not its tee); mutate-only hook composes with the deny-only
-  poll-guard. See droplet/native/brain-compress/STATUS.md.
+  poll-guard. See host/native/brain-compress/STATUS.md.
 - **Stages 3, 4A, 6, 7** — DONE. Response profiles; context packs (--context-file); file
   tools + Read guard (verified live); ops docs. PR feature-complete. 4B/5/8 deferred
   (build risk / H4-unverifiable / off-by-default)...

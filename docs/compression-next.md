@@ -3,7 +3,7 @@
 The compression engine shipped in v0.2.1 (PR #2). This plan covers the next phase:
 **prove the savings honestly, then adopt the cheap orthogonal wins.** Read these first:
 `docs/compression-plan.md`, `docs/compression-capabilities.md`,
-`droplet/native/brain-compress/STATUS.md`.
+`host/native/brain-compress/STATUS.md`.
 
 Ground rules (do not violate — they are the whole point of the subsystem):
 - Never report a saving for a surface that was not actually compressed.

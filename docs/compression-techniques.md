@@ -4,7 +4,7 @@
 > "other techniques" backlog in [compression-plan.md](compression-plan.md) Appendix
 > (categories A behavioral, B compressors, C tool-replacement, D newer), constrained by the
 > measured facts H1–H7 in [compression-capabilities.md](compression-capabilities.md) and the
-> shipped `brain-compress` architecture (droplet/native/brain-compress/STATUS.md).
+> shipped `brain-compress` architecture (host/native/brain-compress/STATUS.md).
 > Status: **proposal, nothing implemented.**
 >
 > **Scope boundary:** this document deliberately EXCLUDES the two items owned by the
@@ -287,7 +287,7 @@ No newer external compressor currently has enough verified evidence to justify a
    - Proceed only if the measured reduction in main-model context justifies additional luna tokens and latency.
 
 8. **Deployment discipline for H7:**
-   - Make Rust changes in the development checkout at `droplet/native/brain-compress`.
+   - Make Rust changes in the development checkout at `host/native/brain-compress`.
    - Build release/prebuilt binaries in CI, not on the constrained droplet.
    - Deploy the pinned binary to the installed tree only after harness acceptance.
    - Keep the main-brain policy document’s source-of-truth and installed copy explicit; do not hand-edit only the installed tree.
@@ -350,7 +350,7 @@ locally under our fidelity/accounting rules:
    Claude Code's built-in /compact before building.
 
 Minor: live session+lifetime savings in the statusline (we have `brain compress savings`; wiring
-it into droplet/claude/statusline.sh is small).
+it into host/claude/statusline.sh is small).
 
 Not adopting: MCP tool replacement (schema tax on every request — rejected), account/telemetry,
 batch-Edit (we never touch edit sources).

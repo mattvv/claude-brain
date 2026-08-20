@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- claude-brain Remote Control server (launchd user agent), installed by
+     `brain autostart enable`. Starts the tmux-backed RC server at login so a
+     rebooted machine is reachable from the phone without anyone typing.
+     Note: a launchd *agent* needs a logged-in user — on a dedicated Mac,
+     turn on automatic login. `brain autostart status` says so. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BRAIN_BIN__/brain</string>
+    <string>rc</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/.local/state/brain/log/__LABEL__.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local/state/brain/log/__LABEL__.log</string>
+</dict>
+</plist>

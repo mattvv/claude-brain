@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# claude-brain droplet CLI.
+# claude-brain CLI — runs on whatever machine is your brain.
 #
 #   brain            attach/create the Remote Control session (default)
 #   brain repo add X clone a GitHub repo and serve phone sessions for it
 #                    (also: repo ls | repo serve <name> | repo stop <name>)
 #   brain multi      parable-style multi-model session (no Remote Control)
-#   brain status     health overview: proxy, logins, sessions
+#   brain status     health overview: host, proxy, logins, sessions
+#   brain autostart  come back automatically after a reboot (enable|disable|status)
+#   brain keepawake  stop this machine from sleeping (shows what it will change)
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
 #                    for a world-reachable Funnel URL; 'off' to stop)
 #   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
@@ -16,6 +18,8 @@
 #                    consultants work live, or run them in the background)
 #   brain consult    live consultation progress: status | log | watch
 #   brain update     pull latest claude-brain + rebuild what changed
+#   brain uninstall  remove claude-brain and restore your Claude Code config
+#                    (--purge also deletes state and linked credentials)
 #   brain help       this text
 
 set -euo pipefail
@@ -25,10 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 AGENTS_DIR="$HOME/.claude/agents"
-AGENTS_RC_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-rc"
-AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-multi"
-UNIT_SRC="$BRAIN_REPO_DIR/droplet/systemd/cli-proxy-api.service"
-UNIT_DST="$HOME/.config/systemd/user/cli-proxy-api.service"
+AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
+AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
 
 # Names covered by both lanes; installing one lane removes the other's copies.
 ALL_BRAIN_AGENTS=(brain-fable brain-grok brain-kimi brain-luna brain-sol brain-terra)
@@ -57,10 +59,81 @@ install_block() {
   mv "$tmp" "$target"
 }
 
+# Drop a managed block from ~/.claude/CLAUDE.md, leaving the user's own text.
+remove_block() {
+  local label="$1" target="$HOME/.claude/CLAUDE.md" tmp
+  local start="<!-- claude-brain:$label:start -->" end="<!-- claude-brain:$label:end -->"
+  [ -f "$target" ] || return 0
+  tmp="$(mktemp)"
+  awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target" > "$tmp"
+  mv "$tmp" "$target"
+}
+
 install_routing() {
   install_block "$1" routing
-  install_block "$BRAIN_REPO_DIR/droplet/claude/brain-ops.md" ops
+  install_ops_block
   install_consult_block
+}
+
+# The ops instructions differ by machine, not by taste: on a droplet the brain
+# administers a disposable VM with passwordless sudo; on someone's own Mac or
+# Linux box it must ask before changing the machine, may hit a password prompt
+# it cannot answer, and may be confined to a workspace.
+install_ops_block() {
+  local profile scope src tmp scope_note sudo_note pkg_hint hostdesc
+  profile="$(setting_get PROFILE "$(default_profile)")"
+  if [ "$profile" = droplet ]; then
+    install_block "$BRAIN_REPO_DIR/host/claude/brain-ops-droplet.md" ops
+    return
+  fi
+  scope="$(setting_get SCOPE machine)"
+  if [ "$scope" = workspace ]; then
+    scope_note="**Stay in your workspace.** Your working root is \`$(workspace_dir)\`. Work
+there by default, and ask before reading or writing the user's files elsewhere on this
+machine."
+  else
+    scope_note="**Scope: the whole machine.** The user chose to give you the run of this
+computer, so you may work anywhere in their home directory — but it is still their daily
+machine, so destructive or wide-reaching changes get confirmed first."
+  fi
+  case "$(sudo_mode)" in
+    passwordless) sudo_note="Sudo works without a password here, so use it sparingly and say what you ran." ;;
+    prompt)       sudo_note="Sudo will ask for a password you do not have, so a sudo command will hang or fail — hand it to the user instead." ;;
+    *)            sudo_note="There is no sudo on this machine — anything needing privileges has to be done by the user." ;;
+  esac
+  case "$(pkg_manager)" in
+    brew)   pkg_hint="brew install <pkg>" ;;
+    pacman) pkg_hint="sudo pacman -S <pkg>" ;;
+    apt)    pkg_hint="sudo apt-get install -y <pkg>" ;;
+    dnf)    pkg_hint="sudo dnf install -y <pkg>" ;;
+    *)      pkg_hint="no package manager detected — ask the user" ;;
+  esac
+  hostdesc="$(brain_distro) · $(brain_os)/$(brain_arch)"
+  src="$BRAIN_REPO_DIR/host/claude/brain-ops-local.md"
+  tmp="$(mktemp)"
+  # The scope note is multi-line, and macOS ships one-true-awk, which rejects a
+  # newline inside a `-v` assignment ("newline in string") — so this expands the
+  # placeholder in plain bash instead. Getting this wrong left a Mac with no ops
+  # block at all, which is how it was caught.
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$line" = "__SCOPE_NOTE__" ]; then
+      printf '%s\n' "$scope_note"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$src" \
+    | sed -e "s|__SUDO_NOTE__|$sudo_note|" \
+          -e "s|__PKG_HINT__|$pkg_hint|" \
+          -e "s|__HOSTDESC__|$hostdesc|" > "$tmp"
+  install_block "$tmp" ops
+  rm -f "$tmp"
+}
+
+# Where the brain works by default. Whole-machine scope keeps the historical
+# ~/workspace; workspace scope gets its own root, chosen at setup.
+workspace_dir() {
+  setting_get WORKSPACE_DIR "$HOME/workspace"
 }
 
 # Consultant visibility: background (default — visible via the statusline and
@@ -69,7 +142,7 @@ install_routing() {
 install_consult_block() {
   local mode
   mode="$(setting_get CONSULT_VISIBILITY background)"
-  install_block "$BRAIN_REPO_DIR/droplet/claude/consult-$mode.md" consult
+  install_block "$BRAIN_REPO_DIR/host/claude/consult-$mode.md" consult
 }
 
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
@@ -79,7 +152,7 @@ step_todo() { printf '  %s %s\n' "${C_YELLOW}[    ]${C_RESET}" "$1"; }
 # Silent and non-blocking on network trouble.
 check_for_updates() {
   [ -t 0 ] || return 0
-  timeout 8 git -C "$BRAIN_REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
+  run_timeout 8 git -C "$BRAIN_REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
   local behind
   behind="$(git -C "$BRAIN_REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
   [ "$behind" -gt 0 ] || return 0
@@ -90,7 +163,6 @@ check_for_updates() {
 }
 
 # ---------------------------------------------------------------- rc session
-WORKSPACE_DIR="$HOME/workspace"
 REPOS_DIR="$HOME/repos"
 
 # The RC server refuses untrusted (and home) directories; pre-accept the
@@ -110,7 +182,7 @@ rc_server() {
   need tmux jq
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   install_agents "$AGENTS_RC_SRC"
-  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
   seed_trust "$dir"
   if ! tmux has-session -t "$tmux_name" 2>/dev/null; then
     info "starting Remote Control server for $dir (tmux: $tmux_name)"
@@ -129,10 +201,12 @@ rc_server() {
 }
 
 cmd_rc() {
+  local ws
+  ws="$(workspace_dir)"
   check_for_updates
-  mkdir -p "$WORKSPACE_DIR"
-  git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1 || git -C "$WORKSPACE_DIR" init -q
-  rc_server "$WORKSPACE_DIR" brain-rc brain
+  mkdir -p "$ws"
+  git -C "$ws" rev-parse --git-dir >/dev/null 2>&1 || git -C "$ws" init -q
+  rc_server "$ws" brain-rc brain
 }
 
 # -------------------------------------------------------------------- repos
@@ -196,7 +270,7 @@ cmd_multi() {
   proxy_ready || die "proxy is not healthy — check: brain status"
   check_for_updates
   install_agents "$AGENTS_MULTI_SRC"
-  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-multi.md"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-multi.md"
   local token
   token="$(brain_token)"
   info "starting multi-model session (tmux: brain-multi) — no phone control in this mode"
@@ -213,11 +287,14 @@ cmd_multi() {
 cmd_status() {
   need curl jq
   printf '%s\n' "${C_BOLD}claude-brain status${C_RESET}"
+  printf '    host: %s · %s/%s · profile=%s · scope=%s\n' \
+    "$(brain_distro)" "$(brain_os)" "$(brain_arch)" \
+    "$(setting_get PROFILE "$(default_profile)")" "$(setting_get SCOPE machine)"
 
-  if systemctl --user is-active --quiet cli-proxy-api 2>/dev/null; then
+  if svc_is_active proxy; then
     ok "proxy service: running"
   else
-    fail "proxy service: not running (systemctl --user status cli-proxy-api)"
+    fail "proxy service: not running (restart: $(svc_restart_hint proxy))"
   fi
 
   if proxy_ready; then
@@ -227,10 +304,8 @@ cmd_status() {
     fail "proxy API: not responding on $BRAIN_PROXY_URL"
   fi
 
-  if command -v ss >/dev/null 2>&1; then
-    if ss -ltn 2>/dev/null | grep -q "0.0.0.0:$BRAIN_PROXY_PORT\|\[::\]:$BRAIN_PROXY_PORT"; then
-      fail "SECURITY: proxy is listening on a public interface — it must be 127.0.0.1 only"
-    fi
+  if listening_publicly "$BRAIN_PROXY_PORT"; then
+    fail "SECURITY: proxy is listening on a public interface — it must be 127.0.0.1 only"
   fi
 
   printf '%s\n' "${C_BOLD}linked accounts (proxy vendors)${C_RESET}"
@@ -260,11 +335,15 @@ cmd_status() {
   fi
 
   printf '%s\n' "${C_BOLD}tailscale${C_RESET}"
-  if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
-    ok "connected: $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+  if ts="$(tailscale_bin)" && "$ts" status >/dev/null 2>&1; then
+    ok "connected: $("$ts" status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
   else
     step_todo "not connected (optional — brain auth tailscale enables 'brain expose')"
   fi
+
+  printf '%s\n' "${C_BOLD}always on${C_RESET}"
+  printf '    %s\n' "$(autostart_status | head -1)"
+  printf '    %s\n' "$(keepawake_status)"
 
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
   if tmux has-session -t brain-rc 2>/dev/null; then
@@ -402,7 +481,7 @@ cmd_auth() {
         # Browser OAuth whose callback lands on localhost:1455 of the machine
         # running THIS command. Run it from your laptop with the port forwarded:
         #   ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc "brain auth chatgpt --browser"'
-        if [ -z "${SSH_CONNECTION:-}" ] || ! ss -ltn 2>/dev/null | grep -q ':1455'; then
+        if [ -z "${SSH_CONNECTION:-}" ] || ! port_listening 1455; then
           warn "reminder: this only works when localhost:1455 is forwarded from the"
           warn "machine whose browser you'll use, e.g. from your laptop:"
           warn "  ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc \"brain auth chatgpt --browser\"'"
@@ -445,9 +524,13 @@ cmd_auth() {
       info "open the URL below on your phone/laptop and approve this machine"
       info "(install the Tailscale app on your phone first: tailscale.com/download)"
       sudo tailscale up --timeout 240s
-      # Let tailnet traffic through the default-deny firewall (tailscale0 only).
-      sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
-      ok "joined tailnet as: $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+      # The droplet runs a default-deny firewall we installed, so tailnet
+      # traffic needs an explicit hole. We never touch a personal machine's
+      # firewall — that is the owner's business.
+      if [ "$(setting_get PROFILE "$(default_profile)")" = droplet ] && command -v ufw >/dev/null 2>&1; then
+        sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
+      fi
+      ok "joined tailnet as: $("$(tailscale_bin)" status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
       ;;
     *)
       die "usage: brain auth <anthropic|chatgpt|grok|kimi|claude|github|tailscale>"
@@ -462,15 +545,12 @@ cmd_auth() {
 render_proxy_config() {
   umask 077
   sed -e "s|__TOKEN__|$(brain_token)|" -e "s|__AUTH_DIR__|$BRAIN_AUTH_DIR|" \
-    "$BRAIN_REPO_DIR/droplet/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
+    "$BRAIN_REPO_DIR/host/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
   chmod 600 "$BRAIN_PROXY_CONFIG"
 }
 
 install_unit() {
-  mkdir -p "$(dirname "$UNIT_DST")"
-  cp "$UNIT_SRC" "$UNIT_DST"
-  systemctl --user daemon-reload
-  systemctl --user enable --now cli-proxy-api
+  svc_install proxy
 }
 
 ask_yn() {
@@ -479,13 +559,102 @@ ask_yn() {
   case "$reply" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
 }
 
+# ask_default PROMPT DEFAULT — free-text question with an Enter-accepts default.
+ask_default() {
+  local reply
+  read -r -p "$1 [$2]: " reply </dev/tty || reply=""
+  printf '%s' "${reply:-$2}"
+}
+
+# Non-interactive answers so a Claude session (or a script) can drive setup:
+#   brain setup --yes --scope workspace --workspace ~/brain --link chatgpt,github
+BRAIN_SETUP_YES=0
+BRAIN_SETUP_LINK=""
+BRAIN_SETUP_SCOPE=""
+BRAIN_SETUP_WS=""
+BRAIN_SETUP_AUTOSTART=0
+
+# Ask a yes/no question, unless --yes already answered it.
+setup_yn() {
+  [ "$BRAIN_SETUP_YES" -eq 1 ] && return 0
+  ask_yn "$1"
+}
+
+# True when a vendor was requested with --link (or nothing was: ask about all).
+setup_wants() {
+  [ -z "$BRAIN_SETUP_LINK" ] && return 1
+  case ",$BRAIN_SETUP_LINK," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Should we offer this vendor at all? With --link, only the listed ones. With
+# --yes and no --link, none: "yes to everything" must not mean "start an OAuth
+# flow nobody is watching" — an unattended caller links accounts afterwards
+# with `brain auth start <vendor>`.
+setup_offer() {
+  if [ -n "$BRAIN_SETUP_LINK" ]; then setup_wants "$1"; return $?; fi
+  [ "$BRAIN_SETUP_YES" -eq 1 ] && return 1
+  return 0
+}
+
 cmd_setup() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y)     BRAIN_SETUP_YES=1; shift ;;
+      --link)       BRAIN_SETUP_LINK="${2:?}"; shift 2 ;;
+      --scope)      BRAIN_SETUP_SCOPE="${2:?}"; shift 2 ;;
+      --workspace)  BRAIN_SETUP_WS="${2:?}"; shift 2 ;;
+      --autostart)  BRAIN_SETUP_AUTOSTART=1; shift ;;
+      *) die "usage: brain setup [--yes] [--scope machine|workspace] [--workspace DIR] [--link chatgpt,grok,kimi,github] [--autostart]" ;;
+    esac
+  done
+
   printf '%s\n\n' "${C_BOLD}Welcome to claude-brain setup!${C_RESET} (safe to re-run any time)"
   ensure_brain_dirs
 
+  # 0. what kind of machine is this, and how much of it does the brain get?
+  local profile
+  profile="$(setting_get PROFILE "$(default_profile)")"
+  setting_set PROFILE "$profile"
+  info "step 0/7: this machine — $(brain_distro) · $(brain_os)/$(brain_arch) · profile=$profile"
+  if [ "$profile" = local ]; then
+    # On a droplet this question is meaningless: the machine exists only for
+    # the brain. On someone's own computer it is the important one.
+    local scope="${BRAIN_SETUP_SCOPE:-}"
+    if [ -z "$scope" ]; then
+      if [ "$BRAIN_SETUP_YES" -eq 1 ]; then
+        scope="$(setting_get SCOPE workspace)"
+      else
+        printf '  This is your own computer. How much of it should your brain use?\n'
+        printf '    1) its own folder — it works in one directory and asks before going outside\n'
+        printf '    2) the whole machine — like the cloud version: it administers this computer\n'
+        local reply
+        read -r -p "  Choose [1/2, default 1]: " reply </dev/tty || reply=""
+        case "$reply" in 2) scope=machine ;; *) scope=workspace ;; esac
+      fi
+    fi
+    setting_set SCOPE "$scope"
+    if [ "$scope" = workspace ]; then
+      local ws="${BRAIN_SETUP_WS:-}"
+      if [ -z "$ws" ]; then
+        if [ "$BRAIN_SETUP_YES" -eq 1 ]; then
+          ws="$(setting_get WORKSPACE_DIR "$HOME/brain-workspace")"
+        else
+          ws="$(ask_default "  Working folder" "$HOME/brain-workspace")"
+        fi
+      fi
+      setting_set WORKSPACE_DIR "$ws"
+      mkdir -p "$ws"
+      step_done "workspace: $ws"
+    else
+      step_done "scope: the whole machine"
+    fi
+  else
+    setting_set SCOPE machine
+  fi
+
   # 1. bootstrap artifacts
   info "step 1/7: checking the machine"
-  command -v go >/dev/null 2>&1 || export PATH="$PATH:/usr/local/go/bin"
+  go_path_hint
   need git tmux jq curl openssl go
   claude_bin >/dev/null || {
     info "installing Claude Code"
@@ -507,6 +676,10 @@ cmd_setup() {
   info "step 2/7: sign in to Claude (your main brain)"
   if [ -e "$HOME/.claude/.credentials.json" ] || grep -q oauthAccount "$HOME/.claude.json" 2>/dev/null; then
     step_done "claude login already present"
+  elif [ "$BRAIN_SETUP_YES" -eq 1 ] || [ ! -t 0 ]; then
+    # The Claude login is interactive by nature. Unattended runs must not launch
+    # it into a terminal nobody is watching; they say what is still missing.
+    warn "no Claude login yet — sign in with: brain auth anthropic"
   else
     cmd_auth anthropic
   fi
@@ -522,7 +695,7 @@ cmd_setup() {
 
   # 4. systemd service
   info "step 4/7: starting the router service"
-  if systemctl --user is-active --quiet cli-proxy-api 2>/dev/null; then
+  if svc_is_active proxy; then
     step_done "router already running"
   else
     install_unit
@@ -533,23 +706,23 @@ cmd_setup() {
   # 5. vendor logins
   info "step 5/7: link your other AI accounts (each optional — Enter to accept, n to skip)"
   if vendor_linked chatgpt; then step_done "ChatGPT linked"; else
-    if ask_yn "  Link a ChatGPT account (for GPT models)?"; then cmd_auth chatgpt || warn "ChatGPT login didn't finish — retry later: brain auth chatgpt"; fi
+    if setup_offer chatgpt && setup_yn "  Link a ChatGPT account (for GPT models)?"; then cmd_auth chatgpt || warn "ChatGPT login didn't finish — retry later: brain auth chatgpt"; fi
   fi
   if vendor_linked grok; then step_done "Grok linked"; else
-    if ask_yn "  Link a Grok (X.AI) account?"; then cmd_auth grok || warn "Grok login didn't finish — retry later: brain auth grok"; fi
+    if setup_offer grok && setup_yn "  Link a Grok (X.AI) account?"; then cmd_auth grok || warn "Grok login didn't finish — retry later: brain auth grok"; fi
   fi
   if vendor_linked kimi; then step_done "Kimi linked"; else
-    if ask_yn "  Link a Kimi account?"; then cmd_auth kimi || warn "Kimi login didn't finish — retry later: brain auth kimi"; fi
+    if setup_offer kimi && setup_yn "  Link a Kimi account?"; then cmd_auth kimi || warn "Kimi login didn't finish — retry later: brain auth kimi"; fi
   fi
 
   # 6. GitHub
   info "step 6/7: connect GitHub (so your brain can work on your repos)"
   if gh auth status >/dev/null 2>&1; then
     step_done "github linked"
-  else
-    ask_yn "  Log in to GitHub now?" && cmd_auth github || true
+  elif setup_offer github; then
+    setup_yn "  Log in to GitHub now?" && cmd_auth github || true
   fi
-  if [ -z "$(git config --global user.email 2>/dev/null)" ]; then
+  if [ -z "$(git config --global user.email 2>/dev/null)" ] && [ "$BRAIN_SETUP_YES" -eq 0 ]; then
     local gname gemail
     read -r -p "  Your name for git commits: " gname </dev/tty || gname=""
     read -r -p "  Your email for git commits: " gemail </dev/tty || gemail=""
@@ -561,6 +734,10 @@ cmd_setup() {
   local compress_toml="$BRAIN_STATE_DIR/compress/compress.toml"
   if grep -Eqs '^ *enabled *= *true' <(sed -n '/^\[recall\]/,/^\[/p' "$compress_toml" 2>/dev/null); then
     step_done "session recall enabled"
+  elif [ "$BRAIN_SETUP_YES" -eq 1 ] || [ ! -t 0 ]; then
+    # Unattended: leave the privacy-sensitive default alone rather than
+    # answering a question about the user's past transcripts for them.
+    info "  session recall left off (enable later: add [recall] enabled = true to $compress_toml)"
   else
     local reply=""
     printf '  Enable session recall? It lets the brain search your PAST Claude Code\n'
@@ -577,21 +754,92 @@ cmd_setup() {
     esac
   fi
 
-  # 7. done
-  info "step 7/7: all set!"
-  cat <<'CHEAT'
 
-  Your everyday commands (run after `ssh claude-brain`):
-    brain          start/attach your main session, then /remote-control to link your phone
-    brain status   is everything healthy?
-    brain multi    power mode: other models drive natively (no phone control)
-    brain auth X   redo any login (anthropic|chatgpt|grok|kimi|github)
-    brain update   get the latest claude-brain
+  # 7. always on
+  info "step 7/7: wiring Claude Code, and staying available"
+  # Install the RC lane's agents and this machine's CLAUDE.md blocks now rather
+  # than at first session: the ops block is what tells the brain its scope and
+  # whether sudo will prompt, and an unattended install would otherwise leave
+  # the machine without those rules until someone ran `brain` by hand.
+  install_agents "$AGENTS_RC_SRC"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
+  step_done "consultant agents + routing installed"
+  if svc_is_active rc; then
+    step_done "autostart already on"
+  elif [ "$BRAIN_SETUP_AUTOSTART" -eq 1 ] ||
+       { [ "$BRAIN_SETUP_YES" -eq 0 ] && ask_yn "  Start your brain automatically after a reboot?"; }; then
+    # Under --yes this is opt-in via --autostart, not implied: the plan the
+    # caller was shown said "autostart: no", and the plan is what happens.
+    autostart_enable && ok "autostart enabled" || warn "could not enable autostart"
+    autostart_status | tail -n +2 | sed 's/^/    /'
+  fi
+  if [ "$(brain_os)" = macos ] || [ "$(setting_get PROFILE "$(default_profile)")" = local ]; then
+    printf '    %s\n' "$(keepawake_status)"
+    printf '    %s\n' "(a sleeping computer cannot be reached — 'brain keepawake' fixes that)"
+  fi
+
+  printf '\n%s\n' "${C_BOLD}All set. Your everyday commands:${C_RESET}"
+  cat <<'CHEAT'
+    brain            start/attach your main session — it appears in the Claude app
+    brain status     is everything healthy?
+    brain autostart  come back automatically after a reboot
+    brain multi      power mode: other models drive natively (no phone control)
+    brain auth X     redo any login (anthropic|chatgpt|grok|kimi|github)
+    brain update     get the latest claude-brain
+    brain uninstall  remove claude-brain and restore your Claude Code config
     brain explore "question"   cheap-model repo navigation (discovery only)
 
 CHEAT
-  if ask_yn "Start your brain session now?"; then
+  if [ -t 0 ] && setup_yn "Start your brain session now?"; then
     cmd_rc
+  elif [ "$BRAIN_SETUP_YES" -eq 1 ]; then
+    info "start it whenever you like with: brain"
+  fi
+}
+
+# ---------------------------------------------------------------- always-on
+# Two different promises: autostart is "the brain comes back after a reboot",
+# keepawake is "the machine is awake to be reached at all". Only the second
+# changes system-wide settings, so only it asks first.
+cmd_autostart() {
+  case "${1:-status}" in
+    enable)
+      autostart_enable
+      ok "autostart enabled"
+      autostart_status | tail -n +2 | sed 's/^/    /'
+      ;;
+    disable)
+      autostart_disable
+      ok "autostart disabled — start your brain by hand with: brain"
+      ;;
+    status)
+      autostart_status
+      ;;
+    *)
+      die "usage: brain autostart [enable|disable|status]"
+      ;;
+  esac
+}
+
+cmd_keepawake() {
+  local cmds
+  cmds="$(keepawake_cmds)"
+  if [ "${1:-}" = "status" ]; then keepawake_status; return; fi
+  if [ -z "$cmds" ]; then
+    warn "no keep-awake settings to change on this platform"
+    return
+  fi
+  info "current: $(keepawake_status)"
+  info "this will change a system setting on this computer:"
+  printf '%s\n' "$cmds" | sed 's/^/    /'
+  if [ "${1:-}" = "--yes" ] || ask_yn "Apply it?"; then
+    printf '%s\n' "$cmds" | while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      eval "$c"
+    done
+    ok "$(keepawake_status)"
+  else
+    info "left unchanged"
   fi
 }
 
@@ -601,12 +849,13 @@ CHEAT
 cmd_expose() {
   local arg="${1:-}" public=0
   [ "${2:-}" = "--public" ] && public=1
-  command -v tailscale >/dev/null 2>&1 || die "Tailscale isn't set up — run: brain auth tailscale"
-  tailscale status >/dev/null 2>&1 || die "Tailscale is not connected — run: brain auth tailscale"
+  local ts
+  ts="$(tailscale_bin)" || die "Tailscale isn't set up — run: brain auth tailscale"
+  "$ts" status >/dev/null 2>&1 || die "Tailscale is not connected — run: brain auth tailscale"
   case "$arg" in
     off)
-      sudo tailscale serve reset
-      sudo tailscale funnel reset 2>/dev/null || true
+      sudo "$ts" serve reset
+      sudo "$ts" funnel reset 2>/dev/null || true
       ok "nothing is exposed any more"
       ;;
     ''|*[!0-9]*)
@@ -614,13 +863,13 @@ cmd_expose() {
       ;;
     *)
       local host
-      host="$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+      host="$("$ts" status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
       if [ "$public" -eq 1 ]; then
-        sudo tailscale funnel --bg "$arg" >/dev/null
+        sudo "$ts" funnel --bg "$arg" >/dev/null
         ok "PUBLIC (anyone with the link): https://$host/"
         warn "this is on the open internet — run 'brain expose off' when done"
       else
-        sudo tailscale serve --bg "$arg" >/dev/null
+        sudo "$ts" serve --bg "$arg" >/dev/null
         ok "private (your tailnet devices only): https://$host/"
       fi
       ;;
@@ -692,8 +941,32 @@ cmd_config() {
   case "$key" in
     '')
       printf '%s\n' "${C_BOLD}brain settings${C_RESET}"
-      printf '  consult = %s   (brain config consult <foreground|background>)\n' \
+      printf '  consult    = %s   (brain config consult <foreground|background>)\n' \
         "$(setting_get CONSULT_VISIBILITY background)"
+      printf '  profile    = %s   (set at install time)\n' "$(setting_get PROFILE "$(default_profile)")"
+      printf '  scope      = %s   (brain config scope <machine|workspace>)\n' "$(setting_get SCOPE machine)"
+      printf '  workspace  = %s\n' "$(workspace_dir)"
+      ;;
+    statusline)
+      command -v jq >/dev/null 2>&1 || die "jq is required to change the statusline"
+      local settings="$HOME/.claude/settings.json"
+      [ -s "$settings" ] || echo '{}' > "$settings"
+      case "$val" in
+        on)
+          jq --arg c "$BRAIN_REPO_DIR/host/claude/statusline.sh" \
+             '.statusLine = {type: "command", command: $c, refreshInterval: 2}' \
+             "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+          ok "claude-brain statusline enabled (new sessions pick it up)"
+          ;;
+        off)
+          jq 'if ((.statusLine.command // "") | test("claude-brain|statusline.sh")) then del(.statusLine) else . end' \
+             "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+          ok "claude-brain statusline removed"
+          ;;
+        *)
+          jq -r '.statusLine.command // "none"' "$settings"
+          ;;
+      esac
       ;;
     consult)
       case "$val" in
@@ -711,8 +984,21 @@ cmd_config() {
           ;;
       esac
       ;;
+    scope)
+      case "$val" in
+        '') setting_get SCOPE machine ;;
+        machine|workspace)
+          setting_set SCOPE "$val"
+          [ "$val" = workspace ] && [ -n "${3:-}" ] && setting_set WORKSPACE_DIR "$3"
+          install_ops_block
+          ok "scope is now $val (working root: $(workspace_dir))"
+          info "applies to new Claude sessions"
+          ;;
+        *) die "usage: brain config scope <machine|workspace> [workspace-dir]" ;;
+      esac
+      ;;
     *)
-      die "usage: brain config [consult <foreground|background>]"
+      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>]"
       ;;
   esac
 }
@@ -721,15 +1007,78 @@ cmd_config() {
 cmd_update() {
   info "updating claude-brain"
   git -C "$BRAIN_REPO_DIR" pull --ff-only
-  "$BRAIN_REPO_DIR/droplet/install.sh"
+  "$BRAIN_REPO_DIR/host/install.sh"
   "$SCRIPT_DIR/brain-proxy-build"   # no-op unless PIN changed
   if claude_bin >/dev/null; then "$(claude_bin)" update || true; fi
   if [ -f "$BRAIN_PROXY_CONFIG" ]; then
-    cp "$UNIT_SRC" "$UNIT_DST"
-    systemctl --user daemon-reload
-    systemctl --user restart cli-proxy-api
+    svc_install proxy
+    svc_restart proxy
   fi
   ok "updated"
+}
+
+# ---------------------------------------------------------------- uninstall
+# The counterweight to installing on a machine someone actually uses: put their
+# Claude Code config back, stop our services, and leave their repos alone.
+cmd_uninstall() {
+  local purge=0
+  [ "${1:-}" = "--purge" ] && purge=1
+
+  info "this will remove claude-brain from this machine:"
+  printf '    stop and remove the router%s service(s)\n' "$([ "$(brain_os)" = macos ] && echo " (launchd)" || echo " (systemd)")"
+  printf '    remove the brain commands from ~/.local/bin\n'
+  printf '    remove claude-brain hooks, agents and CLAUDE.md blocks from ~/.claude\n'
+  if [ "$purge" -eq 1 ]; then
+    printf '    %s\n' "${C_RED}delete all brain state AND your linked account credentials${C_RESET}"
+  else
+    printf '    keep your state and linked accounts (add --purge to delete those too)\n'
+  fi
+  printf '    keep the claude-brain checkout at %s\n' "$BRAIN_REPO_DIR"
+  ask_yn "Go ahead?" || { info "nothing changed"; return 0; }
+
+  svc_uninstall rc
+  svc_uninstall proxy
+
+  local tool
+  for tool in brain-ask brain-compress brain-proxy-build; do
+    rm -f "$HOME/.local/bin/$tool"
+  done
+
+  local name
+  for name in "${ALL_BRAIN_AGENTS[@]}"; do
+    rm -f "$AGENTS_DIR/$name.md"
+  done
+  remove_block routing
+  remove_block ops
+  remove_block consult
+
+  # Un-register the hooks and hand the statusline back.
+  local settings="$HOME/.claude/settings.json" backup="$BRAIN_STATE_DIR/settings.json.pre-brain"
+  if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
+    local prior=""
+    [ -f "$backup" ] && prior="$(jq -r '.statusLine.command // empty' "$backup" 2>/dev/null || true)"
+    jq --arg managed 'model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read' \
+       --arg prior "$prior" '
+      def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
+      .hooks.PreToolUse = strip(.hooks.PreToolUse)
+      | .hooks.PostToolUse = strip(.hooks.PostToolUse)
+      | if ((.statusLine.command // "") | test("claude-brain|/host/claude/statusline.sh|/droplet/claude/statusline.sh"))
+        then (if $prior == "" then del(.statusLine)
+              else .statusLine = {type: "command", command: $prior, refreshInterval: 2} end)
+        else . end
+    ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+    ok "restored ~/.claude/settings.json (backup kept at $backup)"
+  fi
+
+  if [ "$purge" -eq 1 ]; then
+    warn "deleting state and credentials"
+    rm -rf "$BRAIN_CONFIG_DIR" "$BRAIN_DATA_DIR" "$BRAIN_STATE_DIR" "$BRAIN_AUTH_DIR"
+  fi
+
+  rm -f "$HOME/.local/bin/brain"
+  ok "claude-brain removed"
+  info "the checkout is still at $BRAIN_REPO_DIR — delete it if you want it gone"
+  info "your PATH line in ~/.bashrc / ~/.zshrc is harmless, but you can remove it"
 }
 
 # ----------------------------------------------------------------- dispatch
@@ -738,15 +1087,18 @@ case "${1:-rc}" in
   multi)     cmd_multi ;;
   status)    cmd_status ;;
   expose)    shift; cmd_expose "$@" ;;
+  autostart) shift; cmd_autostart "$@" ;;
+  keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
-  setup)     cmd_setup ;;
+  setup)     shift; cmd_setup "$@" ;;
   consult)   shift; cmd_consult "$@" ;;
   compress)  shift; cmd_compress "$@" ;;
   explore)   shift; cmd_explore "$@" ;;
   recall)    shift; cmd_recall "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  help|-h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac

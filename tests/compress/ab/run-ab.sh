@@ -42,7 +42,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CRATE="$HERE/../../../droplet/native/brain-compress"
+CRATE="$HERE/../../../host/native/brain-compress"
 FIXTURES="$HERE/fixtures"
 
 AB_MODEL="${AB_MODEL:-grok-4.5}"

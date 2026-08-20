@@ -40,13 +40,13 @@ jobs:
           rustup target add "$TARGET"
 
       - name: Build brain-compress (release, static)
-        working-directory: droplet/native/brain-compress
+        working-directory: host/native/brain-compress
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target "$TARGET"
 
       - name: Build brain-symbols (release, static)
-        working-directory: droplet/native/brain-symbols
+        working-directory: host/native/brain-symbols
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target "$TARGET"
@@ -54,9 +54,9 @@ jobs:
       - name: Collect + checksum
         run: |
           mkdir -p dist
-          cp "droplet/native/brain-compress/target/$TARGET/release/brain-compress" \
+          cp "host/native/brain-compress/target/$TARGET/release/brain-compress" \
              "dist/brain-compress-$TARGET"
-          cp "droplet/native/brain-symbols/target/$TARGET/release/brain-symbols" \
+          cp "host/native/brain-symbols/target/$TARGET/release/brain-symbols" \
              "dist/brain-symbols-$TARGET"
           cd dist && sha256sum ./* > SHA256SUMS
 

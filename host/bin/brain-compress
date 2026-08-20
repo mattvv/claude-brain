@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # brain-compress launcher — dispatches to the native binary. Installed by
-# droplet/install.sh under ~/.local/share/brain/native/<version>/. When the
+# host/install.sh under ~/.local/share/brain/native/<version>/. When the
 # native binary is absent, compression is simply unavailable (the rest of brain
 # keeps working); we say so rather than failing obscurely.
 set -euo pipefail
@@ -9,7 +9,7 @@ BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 NATIVE="$BRAIN_DATA_DIR/native/current/brain-compress"
 
 if [ ! -x "$NATIVE" ]; then
-  echo "brain-compress: native binary not installed (run: brain update, or build droplet/native/brain-compress)" >&2
+  echo "brain-compress: native binary not installed (run: brain update, or build host/native/brain-compress)" >&2
   exit 127
 fi
 

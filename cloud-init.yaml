@@ -1,7 +1,11 @@
 #cloud-config
 # claude-brain droplet bootstrap. Secret-free by design: cloud-init user-data
 # is readable from the droplet metadata endpoint, so nothing sensitive goes here.
-# Used identically by setup.sh (doctl) and the manual DO-console path.
+# Used identically by install.sh --digitalocean and the manual DO-console path.
+#
+# Everything that installs software lives in host/bootstrap.sh, which a local
+# Mac or Linux install runs too — this file only does the parts that are
+# genuinely DigitalOcean-shaped: create the user, mirror the SSH keys, swap.
 
 users:
   - name: brain
@@ -12,12 +16,9 @@ users:
 package_update: true
 packages:
   - git
-  - tmux
-  - jq
   - curl
   - ufw
   - unattended-upgrades
-  - openssl
 
 swap:
   filename: /swapfile
@@ -37,28 +38,14 @@ runcmd:
   - cp /root/.ssh/authorized_keys /home/brain/.ssh/authorized_keys || true
   - chown -R brain:brain /home/brain/.ssh
   - chmod 700 /home/brain/.ssh && chmod 600 /home/brain/.ssh/authorized_keys
-  # Firewall: SSH only. The model router stays loopback-only and is never opened.
-  - ufw allow OpenSSH
-  - ufw --force enable
   - systemctl restart ssh
-  # Go toolchain (apt's Go is too old for the pinned proxy build).
-  - curl -fsSL https://go.dev/dl/go1.24.5.linux-amd64.tar.gz -o /tmp/go.tgz
-  - tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
-  - printf 'export PATH=$PATH:/usr/local/go/bin\n' > /etc/profile.d/golang.sh
-  # GitHub CLI (official apt repo).
-  - mkdir -p -m 755 /etc/apt/keyrings
-  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - chmod 644 /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-  - apt-get update && apt-get install -y gh
-  # Keep the user systemd instance (router service) alive without a login.
-  - loginctl enable-linger brain
-  # claude-brain itself.
+  # claude-brain itself. bootstrap.sh installs the toolchain (Go, gh, tmux, jq,
+  # Rust, Claude Code) and does the droplet-only hardening: ufw SSH-only and
+  # `loginctl enable-linger` so the router survives logout.
   - sudo -u brain -H git clone https://github.com/mattvv/claude-brain.git /home/brain/claude-brain
-  - sudo -u brain -H /home/brain/claude-brain/droplet/install.sh
-  # Claude Code (self-contained native installer; no Node required).
-  - sudo -u brain -H bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
-  # Build the proxy in the background so it's ready by the time the owner SSHes in.
-  - sudo -u brain -H bash -c 'PATH=$PATH:/usr/local/go/bin nohup /home/brain/claude-brain/droplet/bin/brain-proxy-build >> /home/brain/.local/state/brain/proxy-build.log 2>&1 &'
+  - sudo -u brain -H bash -lc '/home/brain/claude-brain/host/bootstrap.sh --profile droplet --unattended --with-rust'
+  - sudo -u brain -H bash -lc '/home/brain/claude-brain/host/install.sh'
+  # Build the router in the background so it's ready by the time the owner SSHes in.
+  - sudo -u brain -H bash -lc 'PATH=$PATH:/usr/local/go/bin nohup /home/brain/claude-brain/host/bin/brain-proxy-build >> /home/brain/.local/state/brain/proxy-build.log 2>&1 &'
 
 final_message: "claude-brain bootstrap finished after $UPTIME seconds. SSH in as 'brain' and run: brain setup"

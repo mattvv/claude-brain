@@ -1,11 +1,12 @@
 # claude-brain 🧠
 
-**Your own Claude, running 24/7 on a small cloud computer, controlled from your phone.**
+**Your multi-model agent. Anywhere, always on. Driven by Claude.**
 
-claude-brain sets up a personal AI server (a $12/month DigitalOcean "droplet") that runs
+claude-brain turns a computer you already have — a Mac mini in a closet, a Linux box under
+your desk, a spare laptop, or a $12/month cloud VM — into a personal AI server that runs
 [Claude Code](https://claude.com/claude-code) around the clock. You open the Claude app on
 your phone or [claude.ai/code](https://claude.ai/code) in a browser, attach to your brain,
-and give it work. It keeps going even when your laptop is closed.
+and give it work. It keeps going when you close your laptop, leave the house, or go to bed.
 
 The twist: your brain isn't limited to Claude. It has a built-in **model router** that can
 also consult **Grok**, **GPT**, and **Kimi** — using your own subscriptions to those
@@ -14,10 +15,10 @@ services — and it can work directly on your **GitHub** repositories.
 claude-brain is two things working together: a **model router** (one Claude session that
 delegates to other model families) and a **compression tool** (a local engine that shrinks
 the tokens flowing to and from every model, so long-running work stays cheap). Both run on
-the droplet; both are on by default.
+your brain machine; both are on by default.
 
 ```
-   your phone / laptop                     your droplet ("the brain")
+   your phone / laptop                      your brain (any computer)
   ┌──────────────────┐   Remote Control   ┌────────────────────────────┐
   │ Claude app        │ ◄───────────────► │ Claude Code (always on)    │
   │ claude.ai/code    │                   │   ├── brain-grok  ─┐       │
@@ -27,64 +28,75 @@ the droplet; both are on by default.
                                           └────────────────────────────┘
 ```
 
+The connection is **outbound only**. Your brain reaches out to Anthropic; your phone talks
+to Anthropic. Nothing listens on the internet, so a machine at home behind a router works
+exactly as well as a cloud server — no ports, no public IP, no tunnel.
+
+## Install it by asking Claude
+
+Open Claude Code on the computer you want to use as your brain (or the Claude app attached
+to it) and say:
+
+> **claude help me install claude brain at https://github.com/mattvv/claude-brain**
+
+Claude reads the repo's install guide and walks you through it, asking:
+
+1. **Where should your brain live?** — this computer, another computer over SSH, or a new
+   DigitalOcean droplet it creates for you.
+2. **How much of the machine does it get?** — its own working folder, or the run of the
+   whole machine (the droplet default).
+3. **Which accounts should it use?** — Claude is required; ChatGPT, Grok, Kimi, and GitHub
+   are each optional and can be added later.
+4. **Phone control?** — set up the Remote Control server so sessions show up in the Claude
+   app.
+5. **Always on?** — start at boot, and stop the machine from sleeping.
+
+It shows you the plan before it changes anything, then runs it, hands you each login link
+in chat, and finishes with a health check.
+
+Details for each path: [installing on your own computer](docs/install-local.md) ·
+[installing on a DigitalOcean droplet](docs/install-digitalocean.md).
+
+**Prefer a terminal?** Same flow, no agent:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mattvv/claude-brain/main/install.sh | bash
+```
+
+It asks the same questions. Every answer is also a flag, so you can script it:
+`install.sh --here --scope workspace --link chatgpt,github --autostart --yes`.
+
+## Where can a brain live?
+
+| Host | Cost | Always on? | Notes |
+|---|---|---|---|
+| **Mac mini / iMac / any desktop Mac** | free (you own it) | yes, with `brain autostart` | The sweet spot: quiet, cheap, always plugged in. Enable auto-login so it comes back after a reboot. |
+| **Linux desktop or home server** (Arch, Ubuntu, Debian) | free | yes, with `brain autostart` | Same story. Runs as your user; no root daemon. |
+| **A spare laptop** | free | only while awake and plugged in | Fine for trying it out. A laptop that sleeps is not a brain — keep the lid open and the charger in, or use one of the options above. |
+| **DigitalOcean droplet** | ~$12/month | yes, by definition | Nothing of yours to keep awake. The installer can create and configure it for you. |
+| **Another computer you can SSH to** | — | depends on that machine | `install.sh --ssh you@host` installs remotely and hands back the same commands. |
+
+Supported: **macOS** (Apple Silicon and Intel), **Arch Linux**, **Ubuntu/Debian**. Other
+Linux distributions usually work — the installer will tell you it's untested rather than
+guessing silently.
+
 ## What you need
 
 - A **Claude subscription** (Pro or Max) — this is the brain itself. Required.
-- A **DigitalOcean account** — the cloud computer, about $12/month. Required.
-- A Mac or Linux **laptop** for the one-time setup. Required.
+- A computer to run it on, from the table above. Required.
 - Optional, each adds a model to your brain: a **ChatGPT** subscription, a **Grok** (X.AI)
   subscription, a **Kimi** subscription.
 - Optional: a **GitHub account**, if you want your brain to read and write your code.
 
-## Step 1 — DigitalOcean account and API token
+## Your first phone session
 
-1. Sign up at [digitalocean.com](https://www.digitalocean.com) if you haven't.
-2. Open <https://cloud.digitalocean.com/account/api/tokens>.
-3. Click **Generate New Token**. Name it `claude-brain`, allow **Read and Write**.
-4. Copy the token somewhere safe for a minute. **Treat it like a password.**
-
-## Step 2 — run the setup command
-
-Open the Terminal app on your laptop, paste this, and press Enter:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mattvv/claude-brain/main/setup.sh | bash
-```
-
-It will:
-- install the small DigitalOcean helper tool (`doctl`) and ask you to paste your token,
-- create an SSH key for you if you don't have one,
-- ask a few questions (just press Enter to accept the defaults),
-- create the droplet and wait ~5–10 minutes while it installs itself.
-
-> Don't like terminals? There's a click-through alternative:
-> [docs/manual-setup.md](docs/manual-setup.md).
-
-## Step 3 — link your accounts
-
-When step 2 finishes it offers to connect you straight to the droplet and run the
-setup wizard. Say yes (or later: `ssh claude-brain`, then `brain setup`).
-
-The wizard walks you through each login, one at a time. The pattern is always the same:
-**it prints a web link and a code — open the link on your laptop or phone, enter the code,
-approve.** In order:
-
-1. **Claude** — required. This is your brain's mind.
-2. **ChatGPT** — optional, adds the GPT models.
-3. **Grok** — optional.
-4. **Kimi** — optional.
-5. **GitHub** — optional, lets your brain clone and push your repositories.
-
-Everything is skippable and re-runnable: `brain auth chatgpt`, `brain auth github`, etc.
-
-## Step 4 — your first phone session
-
-1. On the droplet, run `brain`. This starts a persistent Remote Control server —
+1. On your brain machine, run `brain`. This starts a persistent Remote Control server —
    one session is ready immediately, and you can spawn more whenever you like.
+   (`brain autostart enable` makes that happen by itself after a reboot.)
 2. Open the Claude app on your phone (**Code** tab), or claude.ai/code in any browser.
    Your brain's sessions appear there — attach to one, or start a new one, from anywhere.
 
-Close your laptop; everything keeps running on the droplet.
+Close your laptop; everything keeps running on the brain.
 
 Want a second opinion from another model mid-conversation? Just ask — e.g. *"have
 brain-grok double-check this"* or *"ask brain-sol to review this diff"*. Claude delegates
@@ -93,16 +105,19 @@ to the router and brings the answer back.
 **Your brain manages itself.** From that same phone session you can just ask it to:
 - *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
 - *"link my Grok account"* — same, you tap the link, then paste the address it lands on back into chat;
-- *"install &lt;some tool&gt;"* or *"add the &lt;X&gt; MCP server"* — it installs and configures it on the droplet;
+- *"install &lt;some tool&gt;"* or *"add the &lt;X&gt; MCP server"* — it installs and configures it;
 - *"update yourself"* — it pulls the latest claude-brain release.
 
 Skipping a login during setup is fine — you can always link accounts later this way,
 without ever touching a terminal.
 
+On your own computer it asks before changing anything outside its workspace, and it tells
+you when a step needs your password. On a droplet it just does it.
+
 ## Seeing what your brain builds
 
 When your brain is building you a web app, you'll want to open it. That works through
-[Tailscale](https://tailscale.com) (free), which puts your phone and your droplet on a
+[Tailscale](https://tailscale.com) (free), which puts your phone and your brain on a
 private network — no ports ever open to the internet:
 
 1. Install the Tailscale app on your phone and sign in (Google/Apple/GitHub account works).
@@ -111,13 +126,16 @@ private network — no ports ever open to the internet:
    right on your phone. Ask for a **public** link when you want to send it to a friend —
    and tell your brain to *"stop sharing"* when you're done.
 
+Tailscale is also the easiest way to reach a brain at home from a coffee shop.
+
 ## Everyday use
 
 | Command | What it does |
 |---|---|
 | `brain` | Start/attach the phone-control server (spawn as many sessions as you like from the app) |
 | `brain repo add <owner/name>` | Clone one of your GitHub repos and serve phone sessions for it (`repo ls` / `repo serve` / `repo stop`) — or just ask your brain to do it |
-| `brain status` | Health check: router, linked accounts, sessions |
+| `brain status` | Health check: host, router, linked accounts, sessions |
+| `brain autostart enable` | Come back automatically after a reboot (`disable` / `status`) |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
@@ -125,13 +143,15 @@ private network — no ports ever open to the internet:
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
 | `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
 | `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
+| `brain uninstall` | Remove claude-brain and put your Claude Code config back the way it was |
 
-All run on the droplet, after `ssh claude-brain`.
+Run them on the brain machine — at its own keyboard, over SSH, or by asking a phone session
+to run them for you.
 
 **What's `brain multi`?** In your normal session, Claude is always the brain and other
 models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi
 with full tool access, parable-style. The trade-off: phone control (Remote Control) is
-technically impossible in that mode, so you use it at a terminal over SSH.
+technically impossible in that mode, so you use it at a terminal.
 
 ## Saving tokens (the compression engine)
 
@@ -190,34 +210,44 @@ Rust binary that owns storage, safety, and accounting. Details:
 
 ## Costs
 
-- The droplet: ~$12/month for the default size (`s-1vcpu-2gb`). Billed hourly.
-- Powering off in the DO console still bills (the disk is kept). To stop paying,
-  **destroy** the droplet — but that erases all logins; next time you start from Step 2.
+- **On a computer you own: nothing.** It uses the electricity of a machine that's already on.
+- **On DigitalOcean: ~$12/month** for the default size (`s-1vcpu-2gb`), billed hourly.
+  Powering off in the DO console still bills (the disk is kept). To stop paying, **destroy**
+  the droplet — but that erases all logins; next time you start over.
+- Model usage rides on the subscriptions you already pay for. claude-brain adds no fees.
 
 ## Troubleshooting
 
 The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.md):
 
 - **"The login code expired"** → just re-run it: `brain auth <thing>`.
-- **`brain status` shows the router unhealthy** → `systemctl --user restart cli-proxy-api`, wait 10s.
-- **Phone can't find the session** → make sure `brain` is running on the droplet and you ran `/remote-control` inside it.
-- **`ssh claude-brain` says permission denied** → your SSH key changed; see the troubleshooting doc.
+- **`brain status` shows the router unhealthy** → restart it: `brain status` prints the exact
+  command for your machine (`systemctl --user restart cli-proxy-api` on Linux,
+  `launchctl kickstart -k gui/$UID/sh.claude-brain.proxy` on macOS).
+- **Phone can't find the session** → make sure `brain` is running on the brain machine.
+- **The brain vanished after a reboot** → `brain autostart status`. On a Mac, a brain only
+  comes back once someone is logged in — turn on auto-login for a dedicated machine.
+- **Your Mac keeps falling asleep** → `brain keepawake` (it shows you what it will change).
 
 ## Security notes
 
-- The droplet accepts **SSH only** (key-based, no passwords, no root login) and updates
-  itself with security patches automatically.
-- The model router listens only inside the droplet — it is never reachable from the internet.
-- Dev servers are shared through Tailscale (`brain expose`), never by opening ports.
-  Public Funnel links are explicit and stopped with `brain expose off`.
-- Never share the files in `~/.config/brain/` or `~/.cli-proxy-api/` on the droplet: they
-  hold live login tokens for your accounts.
-- Done with everything? `doctl compute droplet delete claude-brain` wipes it all.
+- The model router listens on **localhost only** — it is never reachable from the internet,
+  on any host. `brain status` fails loudly if that ever stops being true.
+- Nothing about claude-brain opens a port. Dev servers are shared through Tailscale
+  (`brain expose`); public Funnel links are explicit and stopped with `brain expose off`.
+- Never share the files in `~/.config/brain/` or `~/.cli-proxy-api/`: they hold live login
+  tokens for your accounts. On a personal machine, keep full-disk encryption on.
+- On your own computer, claude-brain backs up your Claude Code settings before touching
+  them, and `brain uninstall` puts everything back.
+- On a droplet: SSH only (key-based, no passwords, no root login), automatic security
+  updates, and `doctl compute droplet delete claude-brain` wipes it all.
 
 ## How it works
 
 Curious about the internals (and why phone control and native multi-model routing can't
-share one session)? See [docs/architecture.md](docs/architecture.md).
+share one session)? See [docs/architecture.md](docs/architecture.md). The plan for
+running on any machine is in
+[docs/deploy-anywhere-plan.md](docs/deploy-anywhere-plan.md).
 
 ## License
 

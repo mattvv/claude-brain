@@ -12,15 +12,64 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck -x -S warning setup.sh droplet/install.sh droplet/bin/brain \
-            droplet/bin/brain-ask droplet/bin/brain-proxy-build droplet/lib/common.sh \
-            droplet/claude/statusline.sh droplet/claude/hooks/*.sh
+          shellcheck -x -S warning install.sh setup.sh host/install.sh host/bootstrap.sh \
+            host/bin/brain host/bin/brain-ask host/bin/brain-proxy-build host/lib/common.sh \
+            host/lib/platform.sh host/provision/digitalocean.sh host/claude/statusline.sh \
+            host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh
       - name: cloud-init schema
         run: |
           sudo apt-get install -y cloud-init
           cloud-init schema --config-file cloud-init.yaml
       - name: patch checksum matches PIN
         run: |
-          pinned=$(sed -n 's/^PATCH_SHA256=//p' droplet/proxy/PIN)
-          actual=$(sha256sum droplet/proxy/patches/cliproxyapi-claude-effort.patch | cut -d' ' -f1)
+          pinned=$(sed -n 's/^PATCH_SHA256=//p' host/proxy/PIN)
+          actual=$(sha256sum host/proxy/patches/cliproxyapi-claude-effort.patch | cut -d' ' -f1)
           test "$pinned" = "$actual"
+      - name: compat symlink still resolves
+        # Installs made before the droplet/ -> host/ rename run
+        # $REPO/droplet/install.sh after `git pull`. If this breaks, `brain
+        # update` breaks for every existing user.
+        run: |
+          test -f droplet/install.sh
+          test -f droplet/bin/brain
+          test "$(readlink droplet)" = host
+
+  tests-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # original-awk is the one-true-awk macOS ships. Installing it here lets
+      # the installer suite check the ops block renders under a BSD awk on
+      # Linux too, instead of only when the macOS job runs.
+      - run: sudo apt-get update && sudo apt-get install -y jq original-awk
+      - run: tests/platform/run.sh
+      - run: tests/install/run.sh
+
+  tests-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # macOS ships bash 3.2 as /bin/bash and that is what users will run these
+      # scripts with. Run the suites under it explicitly, so a bash-4-ism cannot
+      # sneak in behind a newer bash from Homebrew.
+      - name: bash version floor
+        run: /bin/bash --version | head -1
+      - run: /bin/bash tests/platform/run.sh
+      - run: /bin/bash tests/install/run.sh
+      - name: installer plans on macOS
+        run: /bin/bash install.sh --plan --here --scope workspace
+
+  tests-arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: dependencies
+        run: pacman -Sy --noconfirm --needed git jq bash grep sed gawk python
+      - uses: actions/checkout@v4
+      - run: tests/platform/run.sh
+      - run: tests/install/run.sh
+      - name: bootstrap maps Arch package names
+        run: |
+          out="$(bash host/bootstrap.sh --dry-run --profile local)"
+          printf '%s\n' "$out"
+          printf '%s' "$out" | grep -q 'pacman -S --needed --noconfirm'

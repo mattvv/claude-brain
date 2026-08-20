@@ -1,0 +1,15 @@
+[Unit]
+Description=claude-brain Remote Control server (claude-brain)
+After=network-online.target
+
+[Service]
+# Starts the tmux-backed RC server so a rebooted machine is reachable from the
+# phone without anyone logging in. Installed by `brain autostart enable`, which
+# also enables lingering so this survives logout.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/brain rc
+Restart=no
+
+[Install]
+WantedBy=default.target

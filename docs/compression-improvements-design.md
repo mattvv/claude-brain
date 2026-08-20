@@ -6,7 +6,7 @@
 > non-RTK adoption plan + the WOZCODE deep-dive appendix),
 > [compression-capabilities.md](compression-capabilities.md) H1–H10 (esp. H7
 > prebuilt-CI-binaries, H8 no server-side compaction exposure, H9/H10 measured
-> A/B results), the shipped crate (`droplet/native/brain-compress`), and the
+> A/B results), the shipped crate (`host/native/brain-compress`), and the
 > frozen-corpus A/B harness (`tests/compress/ab/`).
 >
 > Every design below inherits the non-negotiables:
@@ -51,12 +51,12 @@ locally with no MCP, no account, no telemetry.
 A **separate helper binary `brain-symbols`**, not a cargo feature of
 `brain-compress`:
 
-- New crate `droplet/native/brain-symbols/` — tree-sitter core + grammars for
+- New crate `host/native/brain-symbols/` — tree-sitter core + grammars for
   `rust, python, typescript/javascript, go, bash` only (each grammar is a C
   library; five is the budget; more requires a measured reason).
 - Built **only in CI** (GitHub Actions, `x86_64-unknown-linux-musl`, static),
   published as a pinned release artifact with `sha256` in a checked-in
-  `droplet/native/brain-symbols/ARTIFACT.lock` (version + url + sha256).
+  `host/native/brain-symbols/ARTIFACT.lock` (version + url + sha256).
 - Installed by `install.sh` / `brain update` to
   `~/.local/share/brain/vendor/brain-symbols/<ver>/brain-symbols` — the exact
   pattern already used for rtk (H6). The droplet never compiles it.
@@ -143,7 +143,7 @@ assembled pack.
 An RC bridge agent would add a whole subagent transcript around what is, in the
 end, one consult. A Bash-invoked CLI puts exactly one compact block into the
 main transcript — which is the entire point. So: **no new agent file**; one
-routing paragraph added to `droplet/claude/routing-rc.md` / `brain-ops.md`
+routing paragraph added to `host/claude/routing-rc.md` / `brain-ops.md`
 ("to orient in a repo, run `brain explore "…"` instead of reading files").
 
 ### Command design (new `src/explore.rs`, routed from `cli.rs`)
@@ -161,7 +161,7 @@ Pipeline (v1, single-shot, deterministic gather):
    bodies per the H10 context-pack fix, largest-relevance-first with an
    explicit omissions list ("candidates not included: …").
 2. **One consult:** `ask.rs` path to `gpt-5.6-luna`, `--effort low`, with a
-   fixed system prompt (checked in as `droplet/claude/explore-system.md`):
+   fixed system prompt (checked in as `host/claude/explore-system.md`):
    read-only navigator; telegraphic output; **every claim cites file:line**;
    sections `Defs:` `Refs:` `Flow:` `Gotchas:` `Unknown:`; "if the pack lacks
    the answer, say what to open next — do not guess".
@@ -324,7 +324,7 @@ excluding zero AND finding-recall spot-checks don't regress (manual rubric on
 the 6 review fixtures, recorded in the results archive).
 
 If effort-low wins, the delivery is one line each in the two RC bridge agent
-docs (`droplet/claude/agents-rc/*.md`) and `routing-rc.md`: use
+docs (`host/claude/agents-rc/*.md`) and `routing-rc.md`: use
 `--response review --effort low` for review consults on grok. No crate change.
 
 ### Lever B — model (secondary, same harness run)
@@ -432,7 +432,7 @@ brain compress json [FILE|-] [--table] [--fields a.b,c]   # explicit only, v1
 
 `ledger.rs` already atomically writes `compress/summary.txt`
 (`saved_bytes=… estimated_tokens=… compressed_samples=… updated_at=…`) on every
-append. `droplet/claude/statusline.sh` already tails the consult log; add one
+append. `host/claude/statusline.sh` already tails the consult log; add one
 segment that parses summary.txt (no binary invocation in the render path):
 
 ```

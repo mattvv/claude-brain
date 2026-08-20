@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # variables are consumed by the sourcing scripts
-# Shared helpers for claude-brain droplet scripts. Source, don't execute.
-# Targets Ubuntu (bash + GNU coreutils) only.
+# Shared helpers for claude-brain host scripts. Source, don't execute.
+# Portable across macOS (bash 3.2 + BSD tools) and Linux (bash 4+ + GNU tools):
+# keep this file free of bash-4 syntax, and route anything platform-specific
+# through host/lib/platform.sh.
 
 set -o pipefail
 
-BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$HOME/claude-brain}"
+# Resolve this file's real directory without `readlink -f` (BSD readlink lacked
+# it before macOS 12.3), then derive the repo root from it. This is what lets
+# the repo live anywhere: ~/claude-brain on a droplet, ~/src/... on a Mac.
+_brain_self="${BASH_SOURCE[0]}"
+while [ -L "$_brain_self" ]; do
+  _brain_dir="$(cd -P "$(dirname "$_brain_self")" && pwd)"
+  _brain_self="$(readlink "$_brain_self")"
+  case "$_brain_self" in /*) ;; *) _brain_self="$_brain_dir/$_brain_self" ;; esac
+done
+BRAIN_LIB_DIR="$(cd -P "$(dirname "$_brain_self")" && pwd)"
+unset _brain_self _brain_dir
+BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$(cd -P "$BRAIN_LIB_DIR/../.." && pwd)}"
+
+# Everything platform-specific (os/arch, package manager, services, stat/timeout
+# differences) lives in platform.sh. Sourcing it here means every script that
+# sources common.sh gets the portable helpers automatically.
+# shellcheck source=platform.sh
+. "$BRAIN_LIB_DIR/platform.sh"
 BRAIN_CONFIG_DIR="${BRAIN_CONFIG_DIR:-$HOME/.config/brain}"
 BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 BRAIN_STATE_DIR="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
@@ -19,8 +38,8 @@ BRAIN_PROXY_BIN="$BRAIN_DATA_DIR/proxy/bin/cli-proxy-api"
 BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-8317}"
 BRAIN_PROXY_URL="http://127.0.0.1:$BRAIN_PROXY_PORT"
 
-BRAIN_PIN_FILE="$BRAIN_REPO_DIR/droplet/proxy/PIN"
-BRAIN_PATCH_FILE="$BRAIN_REPO_DIR/droplet/proxy/patches/cliproxyapi-claude-effort.patch"
+BRAIN_PIN_FILE="$BRAIN_REPO_DIR/host/proxy/PIN"
+BRAIN_PATCH_FILE="$BRAIN_REPO_DIR/host/proxy/patches/cliproxyapi-claude-effort.patch"
 PROXY_REPO_URL="https://github.com/router-for-me/CLIProxyAPI.git"
 
 # Colors only when stdout is a terminal.
@@ -108,7 +127,7 @@ consult_active() {
   pgrep -f 'brain-ask ' >/dev/null 2>&1 && return 0
   local now mtime
   now="$(date +%s)"
-  mtime="$(stat -Lc %Y "$BRAIN_CONSULT_LINK" 2>/dev/null || echo 0)"
+  mtime="$(file_mtime "$BRAIN_CONSULT_LINK")"
   [ $((now - mtime)) -le 45 ]
 }
 
@@ -116,7 +135,7 @@ consult_active() {
 # emits these as `**Bolded step**` headers, which read well as progress.
 consult_thinking_step() {
   local t step
-  t="$(readlink -f "$BRAIN_CONSULT_LINK" 2>/dev/null || true).thinking"
+  t="$(abs_path "$BRAIN_CONSULT_LINK" 2>/dev/null || true).thinking"
   [ -f "$t" ] || return 0
   step="$(grep -o '\*\*[^*]\+\*\*' "$t" 2>/dev/null | tail -1 | tr -d '*')"
   [ ${#step} -le 64 ] || step="${step:0:61}..."
@@ -129,9 +148,9 @@ consult_thinking_step() {
 consult_progress_line() {
   consult_active || return 1
   local target name bytes heading step
-  target="$(basename "$(readlink -f "$BRAIN_CONSULT_LINK")")"
+  target="$(basename "$(abs_path "$BRAIN_CONSULT_LINK")")"
   name="${target%-*.log}"
-  bytes="$(stat -Lc %s "$BRAIN_CONSULT_LINK" 2>/dev/null || echo 0)"
+  bytes="$(file_size "$BRAIN_CONSULT_LINK")"
   step="$(consult_thinking_step)"
   if [ "$bytes" -eq 0 ]; then
     if [ -n "$step" ]; then
