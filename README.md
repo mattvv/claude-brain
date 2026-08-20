@@ -11,6 +11,11 @@ The twist: your brain isn't limited to Claude. It has a built-in **model router*
 also consult **Grok**, **GPT**, and **Kimi** — using your own subscriptions to those
 services — and it can work directly on your **GitHub** repositories.
 
+claude-brain is two things working together: a **model router** (one Claude session that
+delegates to other model families) and a **compression tool** (a local engine that shrinks
+the tokens flowing to and from every model, so long-running work stays cheap). Both run on
+the droplet; both are on by default.
+
 ```
    your phone / laptop                     your droplet ("the brain")
   ┌──────────────────┐   Remote Control   ┌────────────────────────────┐
@@ -116,6 +121,7 @@ private network — no ports ever open to the internet:
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
+| `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
 | `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
 
 All run on the droplet, after `ssh claude-brain`.
@@ -124,6 +130,36 @@ All run on the droplet, after `ssh claude-brain`.
 models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi
 with full tool access, parable-style. The trade-off: phone control (Remote Control) is
 technically impossible in that mode, so you use it at a terminal over SSH.
+
+## Saving tokens (the compression engine)
+
+A long-running brain reads a lot of verbose output — test logs, diffs, `git log`, whole
+files — and re-sends context to consultants on every follow-up. claude-brain ships a local
+**compression engine** (`brain-compress`) that trims that waste while keeping the exact
+original one command away. It's on by default and needs no configuration.
+
+What it does:
+
+- **Compacts shell output automatically.** When your brain runs an eligible command
+  (`git log`/`diff`, test runners, `grep`, `find`, …), a hook reroutes it through the engine:
+  the command runs once, its full output is saved, and the model sees a compact view — e.g. a
+  10 KB `git log` becomes ~200 bytes. The full original is always recoverable with
+  `brain compress show <id> --full`.
+- **Leaner file reads.** `brain compress read <file> --outline` (just the signatures),
+  `--query '<goal>'` (matching regions), or `--lines A:B` instead of pulling a huge file whole.
+- **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
+  *paths* (`brain-ask --context-file`) so the file bytes never fill its own context twice, and
+  can request a terser answer (`--response review|debug|concise`).
+- **Honest measurement.** `brain compress savings` reports three separate numbers —
+  provider-reported ground truth, exact bytes saved, and a labelled token estimate — and never
+  blends them into one inflated figure. `brain compress off` disables everything instantly.
+
+The guarantee: **nothing is ever silently dropped.** Every compacted view carries a recovery
+handle, and errors, diffs, and anything about to be edited are never compressed. Under the
+hood it uses [RTK](https://github.com/rtk-ai/rtk) as a filter library, wrapped in a native
+Rust binary that owns storage, safety, and accounting. Details:
+[docs/compression-plan.md](docs/compression-plan.md) and
+[docs/compression-capabilities.md](docs/compression-capabilities.md).
 
 ## Costs
 
