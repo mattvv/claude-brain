@@ -113,15 +113,25 @@ fn build_context_pack(specs: &[ContextSpec]) -> Result<(String, Vec<crate::ledge
         let (a, b) = spec.range.unwrap_or((1, total));
         let a = a.max(1);
         let b = b.min(total);
+        // A partial range gets line numbers (the model needs to know which lines
+        // it's looking at); a whole file is sent verbatim, unnumbered — the
+        // per-line "N\t" prefix measurably inflated vendor input tokens (H9) for
+        // no benefit when the whole file is present.
+        let is_range = spec.range.is_some() && (a > 1 || b < total);
         let mut body = String::new();
         for (idx, line) in all.iter().enumerate() {
             let n = idx + 1;
             if n >= a && n <= b {
-                body.push_str(&format!("{n}\t{line}\n"));
+                if is_range {
+                    body.push_str(&format!("{n}\t{line}\n"));
+                } else {
+                    body.push_str(line);
+                    body.push('\n');
+                }
             }
         }
         let sent_bytes = body.len() as u64;
-        if spec.range.is_some() && (a > 1 || b < total) {
+        if is_range {
             bodies.push_str(&format!("\n--- {label} @{a}:{b} of {total} lines ---\n"));
         } else {
             bodies.push_str(&format!("\n--- {label} ({total} lines) ---\n"));
@@ -140,9 +150,9 @@ fn build_context_pack(specs: &[ContextSpec]) -> Result<(String, Vec<crate::ledge
 fn profile_instruction(profile: &str) -> Option<&'static str> {
     let text = match profile {
         "concise" => "Answer as concisely as correctness allows. Do not restate the question or quote back provided code unchanged; cite file:line instead. Omit preamble and summary.",
-        "review" => "Report only findings. For each: `file:line` — the issue in one line — why it is wrong. Do not restate the reviewed code. No preamble, no closing summary.",
-        "debug" => "State the root cause, then the fix (as a minimal diff or file:line change). Do not narrate what you considered or ruled out.",
-        "implementation" => "Return only the changed code as a unified diff or minimal snippets tagged with file:line. Explain only what is non-obvious, in one line each.",
+        "review" => "Output findings only, as a terse list — one line each: `file:line` then the problem in 15 words or fewer. No code blocks, no restating the reviewed code, no preamble, no summary, no severity labels unless asked. If nothing is wrong, reply exactly 'No issues found.'",
+        "debug" => "State the root cause in one or two sentences, then the fix as a minimal diff or `file:line` change. Do not narrate what you considered or ruled out, and do not restate the code.",
+        "implementation" => "Output ONLY a unified diff (or the minimal changed lines tagged `file:line` if a diff does not fit). No prose, no explanation, no restating the request, no unchanged surrounding code. At most one note of 15 words or fewer per hunk, and only when non-obvious.",
         "architecture" => "Give the recommendation first in one sentence, then the key tradeoffs as bullets. No essay, no restating the prompt.",
         _ => return None,
     };

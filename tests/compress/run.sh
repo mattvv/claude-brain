@@ -193,6 +193,11 @@ c=[e for e in rows if e.get("event_kind")=="consult" and "context_pack" in e.get
 print(c[-1]["artifacts"]["context_pack"])' "$BRAIN_STATE_DIR/compress/ledger.jsonl")"
 check "context-range sends only the slice" '"$BIN" compress show "$PKR" --full | grep -q "@2:3 of 4"'
 check "context-range excludes other lines" '! "$BIN" compress show "$PKR" --full | grep -q "1	alpha"'
+# H9 fix: whole files unnumbered (no per-line prefix inflating vendor input);
+# ranges keep line numbers so the model knows which lines it sees.
+check "whole-file pack is unnumbered"      '"$BIN" compress show "$PKF" --full | grep -qx "alpha"'
+check "whole-file pack has no line prefix" '! "$BIN" compress show "$PKF" --full | grep -q "1	alpha"'
+check "range pack keeps line numbers"      '"$BIN" compress show "$PKR" --full | grep -q "2	beta"'
 
 echo "== p1: frozen-corpus A/B harness (offline, ab-model) =="
 AB_RES="$WORK/ab"
