@@ -1,141 +1,19 @@
 #!/usr/bin/env bash
-# Ask a model behind the local claude-brain proxy a one-shot question.
+# brain-ask launcher. Prefers the native brain-compress applet (async, records
+# observe-only accounting); falls back to the bundled Bash implementation when
+# the native binary is not installed or BRAIN_ASK_LEGACY is set.
 #
-#   brain-ask <model> [options] [prompt]
-#   echo "prompt" | brain-ask <model> [options] -
-#
-# Options:
-#   --system FILE     system prompt from a file
-#   --max-tokens N    response cap (default 8192)
-#   --effort LEVEL    reasoning effort: low|medium|high|xhigh (model-dependent)
-#   --raw             print the raw JSON response instead of extracted text
-#   --stream          print text as it is generated (SSE) instead of waiting
-#
-# The remote model sees ONLY what you send: include all needed context in the
-# prompt. Exit is non-zero on HTTP or transport errors, with the body on stderr.
-
+# The native applet is a byte-for-byte drop-in for the legacy contract (log
+# paths, `.thinking` sidecar, `current` symlink, streaming flush, exit codes).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-# shellcheck source=../lib/common.sh
-. "$SCRIPT_DIR/../lib/common.sh"
+BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
+NATIVE="$BRAIN_DATA_DIR/native/current/brain-compress"
 
-need curl jq
-
-MODEL="${1:-}"
-[ -n "$MODEL" ] || die "usage: brain-ask <model> [--system file] [--max-tokens N] [--effort E] [--raw] [prompt|-]"
-shift
-
-SYSTEM_FILE="" MAX_TOKENS=8192 EFFORT="" RAW=0 STREAM=0 PROMPT=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --system)     SYSTEM_FILE="$2"; shift 2 ;;
-    --max-tokens) MAX_TOKENS="$2"; shift 2 ;;
-    --effort)     EFFORT="$2"; shift 2 ;;
-    --raw)        RAW=1; shift ;;
-    --stream)     STREAM=1; shift ;;
-    -)            PROMPT="$(cat)"; shift ;;
-    *)            PROMPT="$1"; shift ;;
-  esac
-done
-if [ -z "$PROMPT" ]; then
-  [ -t 0 ] && die "no prompt given (pass as argument, or pipe with '-')"
-  PROMPT="$(cat)"
-fi
-[ -n "$PROMPT" ] || die "empty prompt"
-[ "$RAW" -eq 1 ] && [ "$STREAM" -eq 1 ] && die "--raw and --stream cannot be combined"
-
-SYSTEM=""
-if [ -n "$SYSTEM_FILE" ]; then
-  [ -f "$SYSTEM_FILE" ] || die "system file not found: $SYSTEM_FILE"
-  SYSTEM="$(cat "$SYSTEM_FILE")"
+if [ -z "${BRAIN_ASK_LEGACY:-}" ] && [ -x "$NATIVE" ]; then
+  # argv[0]=brain-ask so the statusline's `pgrep -f 'brain-ask '` still matches.
+  exec -a brain-ask "$NATIVE" "$@"
 fi
 
-BODY="$(jq -n \
-  --arg model "$MODEL" \
-  --arg prompt "$PROMPT" \
-  --arg system "$SYSTEM" \
-  --arg effort "$EFFORT" \
-  --argjson max_tokens "$MAX_TOKENS" \
-  --argjson stream "$([ "$STREAM" -eq 1 ] && echo true || echo false)" \
-  '{model: $model, max_tokens: $max_tokens,
-    messages: [{role: "user", content: $prompt}]}
-   + (if $system != "" then {system: $system} else {} end)
-   + (if $effort != "" then {output_config: {effort: $effort}} else {} end)
-   + (if $stream then {stream: true} else {} end)')"
-
-# Pass the bearer token via a 0600 header file, not argv (argv is visible in ps).
-AUTH_HDR="$(mktemp)"
-chmod 600 "$AUTH_HDR"
-printf 'Authorization: Bearer %s\n' "$(brain_token)" > "$AUTH_HDR"
-trap 'rm -f "$AUTH_HDR"' EXIT
-
-if [ "$STREAM" -eq 1 ]; then
-  # Print text deltas as SSE events arrive, teeing a live copy to the consult
-  # log so the statusline / `tail -f` can watch it. Reasoning-summary deltas go
-  # to a `.thinking` sidecar instead of stdout: they must stay out of the answer
-  # (callers pipe stdout), but they are what makes a long silent think visible.
-  # On HTTP errors curl exits 22 (--fail-with-body) and the SSE filters drop the
-  # error body, so point the caller at the non-streaming mode for details.
-  CONSULT_DIR="$BRAIN_STATE_DIR/consult"
-  mkdir -p "$CONSULT_DIR"
-  # (ls exits 2 when no logs exist yet — same set -e/pipefail trap as 0076294)
-  { ls -t "$CONSULT_DIR"/*.log 2>/dev/null || true; } | tail -n +20 | xargs -r rm -f
-  # Drop reasoning sidecars whose answer log has been retired.
-  for t in "$CONSULT_DIR"/*.log.thinking; do
-    [ -e "$t" ] || continue
-    [ -e "${t%.thinking}" ] || rm -f "$t"
-  done
-  CONSULT_LOG="$CONSULT_DIR/$MODEL-$(date +%s).log"
-  THINK_LOG="$CONSULT_LOG.thinking"
-  : > "$CONSULT_LOG"
-  : > "$THINK_LOG"
-  ln -sfn "$CONSULT_LOG" "$CONSULT_DIR/current"
-  warn "streaming — watch live: tail -f $CONSULT_DIR/current"
-  curl -sSN --fail-with-body --connect-timeout 10 --max-time 3600 \
-    -H @"$AUTH_HDR" \
-    -H "anthropic-version: 2023-06-01" \
-    -H "content-type: application/json" \
-    -X POST "$BRAIN_PROXY_URL/v1/messages" \
-    -d "$BODY" \
-  | tee >(sed -nu -e 's/^data: *//p' \
-          | jq --unbuffered -rj '
-              if .type == "content_block_delta" and (.delta.type // "") == "thinking_delta"
-              then .delta.thinking else empty end' \
-          >> "$THINK_LOG") \
-  | sed -nu -e '/^data: *\[DONE\]/d' -e 's/^data: *//p' \
-  | jq --unbuffered -rj '
-      if .type == "content_block_delta" and (.delta.type // "") == "text_delta"
-      then .delta.text
-      elif .type == "error"
-      then "\n[stream error] " + (.error.message // tojson) + "\n"
-      else empty end' \
-  | tee -a "$CONSULT_LOG" \
-  || { fail "streaming request failed — retry without --stream for the error body (proxy: $BRAIN_PROXY_URL)"; exit 1; }
-  echo
-  exit 0
-fi
-
-RESPONSE_FILE="$(mktemp)"
-trap 'rm -f "$RESPONSE_FILE" "$AUTH_HDR"' EXIT
-
-HTTP_CODE="$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
-  --max-time 600 \
-  -H @"$AUTH_HDR" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "content-type: application/json" \
-  -X POST "$BRAIN_PROXY_URL/v1/messages" \
-  -d "$BODY")" || { fail "could not reach the proxy at $BRAIN_PROXY_URL (is cli-proxy-api running? try: brain status)"; exit 1; }
-
-if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-  fail "proxy returned HTTP $HTTP_CODE for model '$MODEL'"
-  cat "$RESPONSE_FILE" >&2
-  echo >&2
-  exit 1
-fi
-
-if [ "$RAW" -eq 1 ]; then
-  cat "$RESPONSE_FILE"
-else
-  jq -r '[.content[] | select(.type == "text") | .text] | join("\n")' "$RESPONSE_FILE"
-fi
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec "$DIR/../libexec/legacy/brain-ask" "$@"

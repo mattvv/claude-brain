@@ -606,6 +606,16 @@ cmd_expose() {
   esac
 }
 
+# ----------------------------------------------------------------- compress
+# Token accounting + artifact recovery (Stage 1: observe-only). Thin passthrough
+# to the native brain-compress binary; the launcher reports clearly if it isn't
+# installed yet.
+cmd_compress() {
+  local launcher
+  launcher="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/brain-compress"
+  exec "$launcher" compress "$@"
+}
+
 # ------------------------------------------------------------------- config
 # Live consultation progress. Shared by the progress hook, the statusline, and
 # anyone tailing by hand, so all three report identical state.
@@ -694,6 +704,7 @@ case "${1:-rc}" in
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
   consult)   shift; cmd_consult "$@" ;;
+  compress)  shift; cmd_compress "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;

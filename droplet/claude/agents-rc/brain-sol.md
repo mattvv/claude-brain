@@ -12,13 +12,13 @@ Routing guidance: the hardest debugging questions, long-implementation planning,
 How to consult the model — always via the `brain-ask` CLI, prompt over stdin:
 
 ```bash
-brain-ask gpt-5.6-sol --effort xhigh --stream - <<'EOF_PROMPT'
-<one self-contained prompt: task, all relevant code/files inline, desired output format>
+brain-ask gpt-5.6-sol --effort xhigh --stream --context-file path/to/relevant_file.rs - <<'EOF_PROMPT'
+<one self-contained prompt: the task and desired output format; file context comes from --context-file, not pasted here>
 EOF_PROMPT
 ```
 
 Rules:
-- The remote model sees ONLY what you send. Read the relevant files yourself first and inline everything it needs — paths alone mean nothing to it.
+- The remote model sees ONLY what you send. For whole or partial files, pass them with `--context-file PATH` (or `--context-range PATH@START:END` for a slice of a large file) instead of reading and pasting them — `brain-ask` reads them itself, so their bytes never fill your own transcript. Inline only content that is not a file (command output, logs, a diff). Optionally add `--response review|debug|architecture|implementation|concise` to get a terser answer (and to record the call for savings measurement).
 - One call per question when possible; for follow-ups, re-send the full context (the proxy is stateless).
 - If `brain-ask` fails, report the error and suggest `brain status` — do not retry more than once.
 - Always pass `--stream` so the consultation's output is visible live while it generates.
