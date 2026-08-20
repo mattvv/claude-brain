@@ -19,7 +19,10 @@ REPO_DIR="$(cd -P "$(dirname "$SELF")/.." && pwd)"
 . "$REPO_DIR/host/lib/platform.sh"
 
 SETTINGS_FILE="$HOME/.config/brain/settings"
-PROFILE="$(sed -n 's/^PROFILE=//p' "$SETTINGS_FILE" 2>/dev/null | tail -1)"
+# `|| true`: on a fresh machine there is no settings file yet, and a failing
+# command substitution in an assignment is fatal under `set -e` — which made
+# this exit silently before default_profile ever ran.
+PROFILE="$(sed -n 's/^PROFILE=//p' "$SETTINGS_FILE" 2>/dev/null | tail -1 || true)"
 [ -n "$PROFILE" ] || PROFILE="$(default_profile)"
 
 STATE_DIR="$HOME/.local/state/brain"

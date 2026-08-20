@@ -87,6 +87,24 @@ HOME="$H2" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/host/install.sh" >/de
 check "claims an unset statusline" \
   '[ "$(jq -r .statusLine.command "$H2/.claude/settings.json")" = "$REPO/host/claude/statusline.sh" ]'
 
+# A genuinely fresh machine: no settings file at all. This is the case the
+# compat/update path hits, and a failing `sed` in an assignment under `set -e`
+# used to kill the installer here without printing anything.
+H3="$TMP/nosettings"; mkdir -p "$H3"
+OUT3="$(HOME="$H3" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/host/install.sh" 2>&1)"
+check "installs with no settings file at all" \
+  'printf %s "$OUT3" | grep -q "claude-brain installed"'
+check "and links the commands"  '[ -L "$H3/.local/bin/brain" ]'
+
+# The compat symlink is what keeps `brain update` working for anyone installed
+# before the rename: the OLD brain runs $REPO/droplet/install.sh after pulling.
+H4="$TMP/viacompat"; mkdir -p "$H4"
+OUT4="$(HOME="$H4" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/droplet/install.sh" 2>&1)"
+check "the pre-rename path still installs" \
+  'printf %s "$OUT4" | grep -q "claude-brain installed"'
+check "and relinks into the new layout" \
+  '[ "$(readlink "$H4/.local/bin/brain")" = "$REPO/host/bin/brain" ]'
+
 echo "== ops instructions match the machine =="
 # The block the brain reads must state the real scope and sudo situation.
 HOME="$H2" bash "$REPO/host/bin/brain" config scope workspace "$H2/work" >/dev/null 2>&1

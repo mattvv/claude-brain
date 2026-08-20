@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-brain droplet CLI.
+# claude-brain CLI — runs on whatever machine is your brain.
 #
 #   brain            attach/create the Remote Control session (default)
 #   brain repo add X clone a GitHub repo and serve phone sessions for it
