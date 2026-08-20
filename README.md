@@ -54,6 +54,9 @@ Claude reads the repo's install guide and walks you through it, asking:
 It shows you the plan before it changes anything, then runs it, hands you each login link
 in chat, and finishes with a health check.
 
+Details for each path: [installing on your own computer](docs/install-local.md) ·
+[installing on a DigitalOcean droplet](docs/install-digitalocean.md).
+
 **Prefer a terminal?** Same flow, no agent:
 
 ```bash

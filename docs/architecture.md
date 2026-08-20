@@ -2,7 +2,16 @@
 
 claude-brain is a remix of [Parable](https://parable.sh)-style multi-model routing,
 re-designed around one goal: **sessions you can drive from your phone** via Claude Code's
-Remote Control.
+Remote Control — on any computer you own, not just a rented VM.
+
+## Why it can live anywhere
+
+Remote Control is **outbound**: the brain connects to `api.anthropic.com`, the phone
+connects to `api.anthropic.com`, and they meet there. The model router listens on
+`127.0.0.1` only. Nothing in the design needs an inbound connection, so a Mac mini behind
+a home router is as reachable as a droplet with a public IP — no ports, no tunnel, no
+dynamic DNS. The cloud VM is a convenience for people without an always-on machine, not
+an architectural requirement.
 
 ## The core constraint
 
@@ -59,6 +68,38 @@ ssh/tmux ──► claude  (env: ANTHROPIC_BASE_URL=http://127.0.0.1:8317)
 
 The two lanes share one agents directory (`~/.claude/agents/`), so launching a lane
 installs its agent set and removes the other's. Don't run both lanes at once.
+
+## Hosts, profiles and scope
+
+One tree (`host/`) runs on every target. Everything that differs is either detected or
+recorded, never hardcoded:
+
+- **`host/lib/platform.sh`** is the only file that knows about macOS vs Linux: os/arch and
+  distro detection, package-manager mapping (brew / pacman / apt / dnf), `sudo` mode,
+  portable `stat`/`abs_path`/`timeout`/port checks, where Tailscale's CLI hides on macOS,
+  and the service layer. Callers use the helpers; if a new platform difference appears, it
+  goes here.
+- **Services** are user-owned, never root daemons — they hold the user's OAuth credentials.
+  systemd *user* units on Linux (`host/service/systemd/`), launchd *user agents* on macOS
+  (`host/service/launchd/*.plist.tmpl`, rendered by `svc_install` because launchd has no
+  `%h`). `svc_restart_hint` prints the correct command for the machine it runs on.
+- **`PROFILE`** (`local` | `droplet`) decides how the machine is administered. Detected
+  from the hardware vendor when unset, so an existing droplet keeps its behaviour across
+  an update. Droplet-only things — `ufw`, `loginctl enable-linger`, `/etc/update-motd.d` —
+  are gated on it and never run on someone's own computer.
+- **`SCOPE`** (`workspace` | `machine`) is asked at setup on local machines and renders the
+  ops instruction block: `host/claude/brain-ops-droplet.md` (owns the machine, passwordless
+  sudo) or `host/claude/brain-ops-local.md` (asks first, may hit a password prompt it
+  cannot answer, may be confined to a working root).
+- **Always-on** is two separate promises: `brain autostart` (a user service that starts the
+  RC server after a reboot) and `brain keepawake` (a system sleep setting — so it prints
+  the exact commands and asks first). On macOS a launchd *agent* needs a logged-in user;
+  `brain autostart status` says so rather than pretending.
+
+Installing on a machine someone already uses is a guest relationship: `host/install.sh`
+backs up `~/.claude/settings.json` once before the first change, refuses to take over a
+statusline they already had, and records what it touched so `brain uninstall` can put it
+all back.
 
 ## The router
 
@@ -125,8 +166,23 @@ tokens.
 
 ## Provisioning
 
-`setup.sh` (laptop, via doctl) and the manual DO-console path share one
-`cloud-init.yaml`, which is deliberately **secret-free** (user-data is readable from the
-droplet metadata endpoint). Boot installs packages, Go, gh, Claude Code, clones this repo,
-and kicks off the proxy build in the background; everything interactive (OAuth logins)
-lives in `brain setup`.
+One installer, three targets. `install.sh` asks where the brain should live and then:
+
+- `--here` — runs `host/bootstrap.sh` (dependencies for this platform), `host/install.sh`
+  (wiring), the pinned router build, and `brain setup`.
+- `--ssh user@host` — re-runs itself over there with the same flags.
+- `--digitalocean` — `host/provision/digitalocean.sh` creates the droplet via doctl and
+  hands off to `brain setup` over SSH.
+
+Every question is also a flag and `--plan` prints the whole thing without executing, which
+is what the agent-driven install (`docs/agent-install.md`) shows the user before touching
+their machine.
+
+`cloud-init.yaml` is deliberately **secret-free** (user-data is readable from the droplet
+metadata endpoint) and now does only the genuinely DigitalOcean-shaped parts — user, SSH
+keys, swap, sshd — then calls the same `host/bootstrap.sh` a local install uses. Everything
+interactive (OAuth logins) lives in `brain setup`.
+
+`setup.sh` remains as a shim for the previously published one-liner, and a `droplet -> host`
+symlink keeps `brain update` working on machines installed before the rename. Both are
+removable one release after this ships.
