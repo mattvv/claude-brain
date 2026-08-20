@@ -49,6 +49,19 @@ brain_target_supported() {
   esac
 }
 
+# local | droplet — how this machine should be administered, when the settings
+# file has not recorded a choice yet (older droplets, upgrades). Detected from
+# the hardware vendor rather than guessed, so an existing droplet keeps its
+# profile after `brain update`.
+default_profile() {
+  [ "$(brain_os)" = linux ] || { printf 'local\n'; return; }
+  if grep -qi digitalocean /sys/class/dmi/id/sys_vendor 2>/dev/null; then
+    printf 'droplet\n'
+  else
+    printf 'local\n'
+  fi
+}
+
 # brew | pacman | apt | dnf | none
 pkg_manager() {
   if command -v brew    >/dev/null 2>&1; then printf 'brew\n';   return; fi
@@ -220,8 +233,9 @@ pkg_install() {
 # launchd user agents on macOS. Never a root daemon: both hold the user's
 # OAuth credentials and must run as the user that owns them.
 
-BRAIN_LAUNCHD_DIR="$HOME/Library/LaunchAgents"
-BRAIN_SYSTEMD_DIR="$HOME/.config/systemd/user"
+# Overridable so the test suite can render units into a sandbox.
+BRAIN_LAUNCHD_DIR="${BRAIN_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}"
+BRAIN_SYSTEMD_DIR="${BRAIN_SYSTEMD_DIR:-$HOME/.config/systemd/user}"
 
 # Map a brain service name to its platform-native unit id.
 svc_unit_id() {
@@ -317,5 +331,80 @@ svc_logs() {
   case "$(brain_os)" in
     macos) tail -n "${2:-50}" "$BRAIN_STATE_DIR/log/$(svc_unit_id "$1").log" 2>/dev/null ;;
     *)     journalctl --user -u "$(svc_systemd_unit "$1")" -n "${2:-50}" --no-pager 2>/dev/null ;;
+  esac
+}
+
+# ------------------------------------------------------------- always-on
+# Two separate things, deliberately kept apart:
+#   autostart — does the brain come back by itself after a reboot?
+#   keepawake — does the machine stay awake so it can be reached at all?
+# Only the second one changes system-wide settings, so only it needs a
+# confirmation from the user (`brain keepawake` prints the exact commands).
+
+# Print what still stands between this machine and "comes back after a reboot".
+autostart_status() {
+  local os; os="$(brain_os)"
+  if svc_is_active rc; then
+    printf 'enabled: the Remote Control server starts by itself\n'
+  else
+    printf 'disabled: nothing starts the brain after a reboot (fix: brain autostart enable)\n'
+  fi
+  if [ "$os" = macos ]; then
+    printf 'note: a launchd user agent only runs once someone is logged in.\n'
+    printf '      On a dedicated Mac, turn on automatic login:\n'
+    printf '      System Settings > Users & Groups > Automatic login.\n'
+  else
+    if loginctl show-user "$(id -un)" 2>/dev/null | grep -q 'Linger=yes'; then
+      printf 'linger: on (services keep running when you log out)\n'
+    else
+      printf 'linger: OFF — services stop when you log out (fix: sudo loginctl enable-linger %s)\n' "$(id -un)"
+    fi
+  fi
+}
+
+autostart_enable() {
+  if [ "$(brain_os)" = linux ]; then
+    loginctl show-user "$(id -un)" 2>/dev/null | grep -q 'Linger=yes' \
+      || sudo loginctl enable-linger "$(id -un)"
+  fi
+  svc_install rc
+}
+
+autostart_disable() {
+  svc_uninstall rc
+}
+
+# The exact commands `brain keepawake` would run, one per line, so they can be
+# shown before anything is changed. Empty output = nothing to do.
+keepawake_cmds() {
+  case "$(brain_os)" in
+    macos)
+      # -c is "while on charger" on purpose: never flatten a laptop battery
+      # because someone tried claude-brain on a MacBook.
+      printf 'sudo pmset -c sleep 0\n'
+      printf 'sudo pmset -c disksleep 0\n'
+      ;;
+    linux)
+      printf 'sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target\n'
+      ;;
+  esac
+}
+
+keepawake_status() {
+  case "$(brain_os)" in
+    macos)
+      if pmset -g custom 2>/dev/null | awk '/AC Power/,0' | grep -qE '^[[:space:]]*sleep[[:space:]]+0'; then
+        printf 'awake: this Mac will not sleep while plugged in\n'
+      else
+        printf 'sleeps: this Mac still sleeps on its own (fix: brain keepawake)\n'
+      fi
+      ;;
+    linux)
+      if systemctl is-enabled sleep.target 2>/dev/null | grep -q masked; then
+        printf 'awake: suspend/sleep targets are masked\n'
+      else
+        printf 'sleeps: suspend is still enabled (fix: brain keepawake)\n'
+      fi
+      ;;
   esac
 }

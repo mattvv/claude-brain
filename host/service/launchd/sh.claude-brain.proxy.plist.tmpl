@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- claude-brain model router (launchd user agent).
+     Rendered by svc_install: __HOME__, __LABEL__ and __PATH__ are substituted
+     because launchd has no %h equivalent. Runs as the user, never as root:
+     it holds that user's OAuth credentials. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/share/brain/proxy/bin/cli-proxy-api</string>
+    <string>--config</string>
+    <string>__HOME__/.config/brain/proxy-config.yaml</string>
+    <string>--local-model</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/.local/state/brain/log/__LABEL__.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local/state/brain/log/__LABEL__.log</string>
+</dict>
+</plist>

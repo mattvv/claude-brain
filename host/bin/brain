@@ -5,7 +5,9 @@
 #   brain repo add X clone a GitHub repo and serve phone sessions for it
 #                    (also: repo ls | repo serve <name> | repo stop <name>)
 #   brain multi      parable-style multi-model session (no Remote Control)
-#   brain status     health overview: proxy, logins, sessions
+#   brain status     health overview: host, proxy, logins, sessions
+#   brain autostart  come back automatically after a reboot (enable|disable|status)
+#   brain keepawake  stop this machine from sleeping (shows what it will change)
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
 #                    for a world-reachable Funnel URL; 'off' to stop)
 #   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
@@ -211,6 +213,9 @@ cmd_multi() {
 cmd_status() {
   need curl jq
   printf '%s\n' "${C_BOLD}claude-brain status${C_RESET}"
+  printf '    host: %s · %s/%s · profile=%s · scope=%s\n' \
+    "$(brain_distro)" "$(brain_os)" "$(brain_arch)" \
+    "$(setting_get PROFILE "$(default_profile)")" "$(setting_get SCOPE machine)"
 
   if svc_is_active proxy; then
     ok "proxy service: running"
@@ -261,6 +266,10 @@ cmd_status() {
   else
     step_todo "not connected (optional — brain auth tailscale enables 'brain expose')"
   fi
+
+  printf '%s\n' "${C_BOLD}always on${C_RESET}"
+  printf '    %s\n' "$(autostart_status | head -1)"
+  printf '    %s\n' "$(keepawake_status)"
 
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
   if tmux has-session -t brain-rc 2>/dev/null; then
@@ -567,6 +576,52 @@ CHEAT
   fi
 }
 
+# ---------------------------------------------------------------- always-on
+# Two different promises: autostart is "the brain comes back after a reboot",
+# keepawake is "the machine is awake to be reached at all". Only the second
+# changes system-wide settings, so only it asks first.
+cmd_autostart() {
+  case "${1:-status}" in
+    enable)
+      autostart_enable
+      ok "autostart enabled"
+      autostart_status | tail -n +2 | sed 's/^/    /'
+      ;;
+    disable)
+      autostart_disable
+      ok "autostart disabled — start your brain by hand with: brain"
+      ;;
+    status)
+      autostart_status
+      ;;
+    *)
+      die "usage: brain autostart [enable|disable|status]"
+      ;;
+  esac
+}
+
+cmd_keepawake() {
+  local cmds
+  cmds="$(keepawake_cmds)"
+  if [ "${1:-}" = "status" ]; then keepawake_status; return; fi
+  if [ -z "$cmds" ]; then
+    warn "no keep-awake settings to change on this platform"
+    return
+  fi
+  info "current: $(keepawake_status)"
+  info "this will change a system setting on this computer:"
+  printf '%s\n' "$cmds" | sed 's/^/    /'
+  if [ "${1:-}" = "--yes" ] || ask_yn "Apply it?"; then
+    printf '%s\n' "$cmds" | while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      eval "$c"
+    done
+    ok "$(keepawake_status)"
+  else
+    info "left unchanged"
+  fi
+}
+
 # ------------------------------------------------------------------- expose
 # Share a local dev server: private HTTPS on the tailnet by default, public
 # via Tailscale Funnel with --public. Never opens firewall ports.
@@ -692,6 +747,8 @@ case "${1:-rc}" in
   multi)     cmd_multi ;;
   status)    cmd_status ;;
   expose)    shift; cmd_expose "$@" ;;
+  autostart) shift; cmd_autostart "$@" ;;
+  keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     cmd_setup ;;
@@ -699,6 +756,6 @@ case "${1:-rc}" in
   compress)  shift; cmd_compress "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
-  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
