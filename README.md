@@ -160,12 +160,13 @@ What it does:
   it reaches the model: a 20-line `git log` went 10,881 → ~320 bytes (~97%), a recursive `grep`
   16,573 → 4,783 bytes (~71%). Every byte stays recoverable.
 - **Consultation answers — modest, task-dependent.** Asking a consultant for a task-matched
-  terse answer cut its *generated* output by roughly **15–25%** in a 30-call-per-arm A/B against
-  Grok-4.5 (best on debugging and config questions; the review/implementation phrasings need
-  tuning and are honestly reported as no-win today). Handing over file *paths* saves the brain
-  from re-holding those files in its own context — a separate, brain-side saving — though it adds
-  a little to what the consultant receives. `brain compress savings` shows all of this split into
-  honest classes; single-vendor caveats and the full A/B are in the docs below.
+  terse answer cut its *generated* output by roughly **20–40%** on debugging, config, and
+  architecture questions in a 30-call-per-arm A/B against Grok-4.5. Review and code-generation
+  questions showed no win — grok's output there is dominated by its own reasoning, which no
+  instruction can trim (honestly reported, not hidden). Handing over file *paths* saves the brain
+  from re-holding those files in its own context — a separate, brain-side saving. `brain compress
+  savings` splits all of this into honest classes; single-vendor caveats and the full A/B are in
+  the docs below.
 
 The guarantee: **nothing is ever silently dropped.** Every compacted view carries a recovery
 handle, and errors, diffs, and anything about to be edited are never compressed. Under the

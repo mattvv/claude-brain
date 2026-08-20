@@ -221,3 +221,24 @@ output −17.4%, input +19.1% per call.
 - Single vendor (grok-4.5), small per-category n, output counts include grok's
   reasoning tokens (high variance — the wide CIs are real). Re-run the same
   frozen corpus against gpt-5.6-luna before generalizing across vendors.
+
+## H10 — Follow-up A/B after the two H9 fixes (grok-4.5, 30 pairs, 2026-08-20)
+
+Re-ran the full frozen corpus after (a) sending whole `--context-file` bodies unnumbered and
+(b) re-tuning the `review`/`implementation` profiles. Results:
+
+- **Context-pack input fix WORKED (kept).** Overall guarded input dropped **+39.4% → +25.4%**;
+  `config` input flipped from **+54% to −24%** (guarded now sends *less* than control). The
+  unnumbering removed the per-line prefix overhead exactly as predicted.
+- **Profile re-tune FAILED (reverted).** `review` stayed noise (+3.2%). `implementation`
+  *regressed* to +50% median — driven by one fixture (`10-impl-followup-diff`) where
+  "output ONLY a unified diff" made grok emit a 3× larger diff (control ~2,600 out vs guarded
+  ~7,800). Confirms these categories are **output-bound by the model's reasoning/verbosity, not
+  by instruction wording**; the wording was reverted to the stable baseline.
+- **Unchanged, solid wins (output):** architecture −38.8% (CI [−1898, −784]), config −31.2%
+  (CI excludes zero), debug −19.6% (CI excludes zero). Overall output −17.3%.
+
+Takeaway: response profiles help debug/config/architecture output and the context-pack fix
+removed the input regression; review/implementation need a *different* lever (separate profiles
+proven against `concise`, or a cheaper model / lower effort), not re-wording — see
+docs/compression-techniques.md.

@@ -150,9 +150,17 @@ fn build_context_pack(specs: &[ContextSpec]) -> Result<(String, Vec<crate::ledge
 fn profile_instruction(profile: &str) -> Option<&'static str> {
     let text = match profile {
         "concise" => "Answer as concisely as correctness allows. Do not restate the question or quote back provided code unchanged; cite file:line instead. Omit preamble and summary.",
-        "review" => "Output findings only, as a terse list — one line each: `file:line` then the problem in 15 words or fewer. No code blocks, no restating the reviewed code, no preamble, no summary, no severity labels unless asked. If nothing is wrong, reply exactly 'No issues found.'",
-        "debug" => "State the root cause in one or two sentences, then the fix as a minimal diff or `file:line` change. Do not narrate what you considered or ruled out, and do not restate the code.",
-        "implementation" => "Output ONLY a unified diff (or the minimal changed lines tagged `file:line` if a diff does not fit). No prose, no explanation, no restating the request, no unchanged surrounding code. At most one note of 15 words or fewer per hunk, and only when non-obvious.",
+        // NOTE: `review` and `implementation` were re-tuned once to be more
+        // directive, but a 30-call-per-arm grok-4.5 A/B measured no improvement
+        // (review stayed noise; "output ONLY a diff" made implementation REGRESS
+        // — grok emitted a huge diff on follow-up-diff tasks). These categories
+        // are output-bound by the model's reasoning/verbosity, not by wording, so
+        // the stable baseline is restored. The real lever is separate profiles
+        // (see docs/compression-techniques.md) proven against `concise`, not
+        // re-wording these. Recorded in compression-capabilities.md (H9).
+        "review" => "Report only findings. For each: `file:line` — the issue in one line — why it is wrong. Do not restate the reviewed code. No preamble, no closing summary.",
+        "debug" => "State the root cause, then the fix (as a minimal diff or file:line change). Do not narrate what you considered or ruled out.",
+        "implementation" => "Return only the changed code as a unified diff or minimal snippets tagged with file:line. Explain only what is non-obvious, in one line each.",
         "architecture" => "Give the recommendation first in one sentence, then the key tradeoffs as bullets. No essay, no restating the prompt.",
         _ => return None,
     };

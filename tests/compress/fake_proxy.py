@@ -43,7 +43,7 @@ class H(BaseHTTPRequestHandler):
             # The profile instructions all contain one of these phrases; their
             # presence marks the guarded arm (see profile_instruction in ask.rs).
             guarded = any(p in system for p in (
-                "concisely", "Output findings only", "root cause",
+                "concisely", "Report only findings", "root cause",
                 "unified diff", "recommendation first"))
             usage = {"input_tokens": 300 + (len(prompt) + len(system)) // 4,
                      "output_tokens": 20 if guarded else 60}
