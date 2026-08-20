@@ -111,7 +111,11 @@ case "$(uname -s)" in
   Darwin|Linux) ;;
   *) die "claude-brain needs macOS or Linux (this is $(uname -s))" ;;
 esac
-[ "$(id -u)" -eq 0 ] && die "run this as your normal user, not root — the brain holds your logins"
+# A plan changes nothing, so it is fine to print as anyone (CI does). A real
+# install as root is not: the brain holds this user's OAuth credentials.
+if [ "$PLAN" -eq 0 ] && [ "$(id -u)" -eq 0 ]; then
+  die "run this as your normal user, not root — the brain holds your logins"
+fi
 
 # Are we already inside a checkout? Then use it; otherwise clone one.
 here="$(cd -P "$(dirname "$0")" && pwd)"
