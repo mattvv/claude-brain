@@ -140,7 +140,45 @@ async fn read(rest: Vec<String>) -> Result<i32, String> {
         (v, false)
     };
 
-    let view = render(&args.path, total, &body, lossy, handle.as_deref());
+    // Duplicate-result elision (design §5a), lossy discovery views only: a
+    // lossless whole-file view can serve as edit preparation and is never
+    // elided. The reference recovers through the NEW artifact.
+    let view_kind = if let Some((a, b)) = args.lines {
+        format!("read:lines:{a}:{b}:{}", args.path)
+    } else if let Some(q) = &args.query {
+        format!("read:query:{q}:{}", args.path)
+    } else if args.outline {
+        format!("read:outline:{}", args.path)
+    } else {
+        format!("read:whole:{}", args.path)
+    };
+    let mut dedup_hit = None;
+    if let (Some(cfg), Some(h)) = (config.as_ref(), handle.as_ref()) {
+        if cfg.dedup_enabled && lossy && !bytes.contains(&0u8) {
+            let sha = crate::dedup::sha256_hex(&bytes);
+            let scope = crate::dedup::current_scope(&state);
+            dedup_hit = crate::dedup::check(&state, &sha, &view_kind, &scope, cfg.dedup_window_hours);
+            crate::dedup::record(&state, &sha, &view_kind, h, &scope);
+        }
+    }
+
+    let view = match (&dedup_hit, handle.as_deref()) {
+        (Some(hit), Some(h)) => {
+            let reference = format!(
+                "[brain-compress {} view identical to {} seen {} ago ({} B raw) — recover: brain compress show {h} --full]\n",
+                args.path,
+                hit.artifact_id,
+                crate::dedup::human_age(hit.age_seconds),
+                bytes.len(),
+            );
+            if reference.len() < render(&args.path, total, &body, lossy, Some(h)).len() {
+                reference
+            } else {
+                render(&args.path, total, &body, lossy, Some(h))
+            }
+        }
+        _ => render(&args.path, total, &body, lossy, handle.as_deref()),
+    };
     print!("{view}");
 
     if let (Some(cfg), Some(h)) = (config.as_ref(), handle.as_ref()) {

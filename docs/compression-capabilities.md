@@ -242,3 +242,17 @@ Takeaway: response profiles help debug/config/architecture output and the contex
 removed the input regression; review/implementation need a *different* lever (separate profiles
 proven against `concise`, or a cheaper model / lower effort), not re-wording — see
 docs/compression-techniques.md.
+
+## H11 — Hook payloads carry `session_id`, `transcript_path`, and `cwd` ✅
+
+Probed 2026-08-20 in the Claude Code 2.1.235 bundle: the hook payload builder
+constructs `{session_id: e.id, transcript_path: Gz(e.id), cwd: t, prompt_id,
+permission_mode, agent_id, …}` as the base for every hook event before the
+event-specific fields (`hook_event_name`, `tool_name`, `tool_input`, …) are
+merged in. Session-scoped features (duplicate-result elision) can therefore
+key on `session_id` from the PreToolUse hooks; the elision keeps a same-cwd +
+time-window fallback for invocations that arrive without a hook (manual runs,
+bridges). Session transcripts live at
+`~/.claude/projects/<flattened-cwd>/<session-uuid>.jsonl` (JSONL; lines carry
+`sessionId`/`timestamp`/`type`/`content`) — the substrate for `recall`; the
+format is undocumented and must be parsed defensively.

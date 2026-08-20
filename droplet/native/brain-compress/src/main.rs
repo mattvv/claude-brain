@@ -15,6 +15,7 @@ mod artifact;
 mod ask;
 mod cli;
 mod config;
+mod dedup;
 mod files;
 mod hook;
 mod http;

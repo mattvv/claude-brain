@@ -72,6 +72,11 @@ fn pre_bash() -> i32 {
     if !Config::load(&state).map(|c| c.enabled).unwrap_or(false) {
         return 0;
     }
+    // Capture the session id for scope-aware features (dedup elision). The
+    // hook payload carries it on every event (H11); best-effort.
+    if let Some(session) = value.get("session_id").and_then(Value::as_str) {
+        crate::dedup::record_session(&state, session);
+    }
 
     let tokens: Vec<String> = command.split_whitespace().map(str::to_string).collect();
     let eligible = is_simple(command) && filter_for(&tokens).is_some();
@@ -151,6 +156,9 @@ fn pre_read() -> i32 {
         Ok(config) if config.enabled => config,
         _ => return 0,
     };
+    if let Some(session) = value.get("session_id").and_then(Value::as_str) {
+        crate::dedup::record_session(&state, session);
+    }
     if config.read_guard == "off" {
         return 0;
     }

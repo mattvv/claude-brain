@@ -22,6 +22,10 @@ pub struct Config {
     pub read_guard: String,
     pub large_file_lines: usize,
     pub large_file_bytes: u64,
+    /// Duplicate-result elision (design §5a): byte-identical successful
+    /// results within the scope window become references to the earlier view.
+    pub dedup_enabled: bool,
+    pub dedup_window_hours: u64,
     pub path: PathBuf,
 }
 
@@ -38,6 +42,8 @@ impl Config {
             read_guard: "observe".to_string(),
             large_file_lines: 800,
             large_file_bytes: 48 * 1024,
+            dedup_enabled: true,
+            dedup_window_hours: 8,
             path: state.join("compress/compress.toml"),
         }
     }
@@ -151,6 +157,24 @@ impl Config {
                     config.large_file_lines = value.parse::<usize>().map_err(|error| {
                         format!(
                             "{}:{}: invalid file_tools.large_file_lines: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "dedup.enabled" => {
+                    config.dedup_enabled = parse_bool(value).ok_or_else(|| {
+                        format!(
+                            "{}:{}: invalid boolean for dedup.enabled",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "dedup.window_hours" => {
+                    config.dedup_window_hours = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid dedup.window_hours: {error}",
                             config.path.display(),
                             line_number + 1
                         )

@@ -200,6 +200,39 @@ check "whole-file pack has no line prefix" '! "$BIN" compress show "$PKF" --full
 check "range pack keeps line numbers"      '"$BIN" compress show "$PKR" --full | grep -q "2	beta"'
 
 
+
+echo "== dedup: duplicate-result elision =="
+# Same successful command twice in the same scope (cwd fallback): the second
+# emission is a one-line reference; recovery via the NEW artifact stays exact.
+( cd "$HERE/../.." && "$BIN" shell -- git log -5 ) >"$WORK/d1.out" 2>/dev/null
+( cd "$HERE/../.." && "$BIN" shell -- git log -5 ) >"$WORK/d2.out" 2>/dev/null
+check "second identical shell result is a reference" 'grep -q "output identical to" "$WORK/d2.out"'
+DNEW="$(grep -oE "id=bc_[A-Z0-9]+" "$WORK/d2.out" | head -1 | sed s/id=//)"
+if [ -n "$DNEW" ]; then
+  "$BIN" compress show "$DNEW" --full >"$WORK/drec.out" 2>/dev/null
+  ( cd "$HERE/../.." && git log -5 ) >"$WORK/dorig.out" 2>/dev/null
+  check "reference recovers exact bytes via NEW artifact" 'diff -q "$WORK/drec.out" "$WORK/dorig.out" >/dev/null'
+fi
+# Failing commands are never elided (errors are never compressed).
+( cd "$HERE/../.." && "$BIN" shell -- git log --bogusflag ) >"$WORK/de1.out" 2>/dev/null || true
+( cd "$HERE/../.." && "$BIN" shell -- git log --bogusflag ) >"$WORK/de2.out" 2>/dev/null || true
+check "failed results never elide" '! grep -q "output identical to" "$WORK/de2.out"'
+# Lossy read views elide on repeat; lossless whole-file views never do.
+"$BIN" compress read "$BIGF" --outline >"$WORK/do1.out" 2>/dev/null
+"$BIN" compress read "$BIGF" --outline >"$WORK/do2.out" 2>/dev/null
+check "repeated lossy read view is a reference" 'grep -q "view identical to" "$WORK/do2.out"'
+check "reference keeps a recovery handle" 'grep -q "recover: brain compress show" "$WORK/do2.out"'
+"$BIN" compress read "$BIGF" --lines 5:9 >"$WORK/dl1.out" 2>/dev/null
+check "different view kind is not cross-elided" '! grep -q "view identical to" "$WORK/dl1.out"'
+printf 'tiny\n' > "$WORK/tiny.txt"
+"$BIN" compress read "$WORK/tiny.txt" >/dev/null 2>&1
+"$BIN" compress read "$WORK/tiny.txt" >"$WORK/dt2.out" 2>/dev/null
+check "lossless whole-file view never elides" '! grep -q "identical to" "$WORK/dt2.out"'
+# Config kill: dedup.enabled = false stops elision.
+printf '\n[dedup]\nenabled = false\n' >> "$BRAIN_STATE_DIR/compress/compress.toml"
+( cd "$HERE/../.." && "$BIN" shell -- git log -5 ) >"$WORK/dd.out" 2>/dev/null
+check "dedup.enabled=false disables elision" '! grep -q "output identical to" "$WORK/dd.out"'
+
 echo "== statusline savings segment =="
 SL="$HERE/../../droplet/claude/statusline.sh"
 SLIN='{"model":{"display_name":"T"},"cwd":"/tmp/x"}'
