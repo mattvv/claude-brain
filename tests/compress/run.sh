@@ -194,6 +194,26 @@ print(c[-1]["artifacts"]["context_pack"])' "$BRAIN_STATE_DIR/compress/ledger.jso
 check "context-range sends only the slice" '"$BIN" compress show "$PKR" --full | grep -q "@2:3 of 4"'
 check "context-range excludes other lines" '! "$BIN" compress show "$PKR" --full | grep -q "1	alpha"'
 
+echo "== p1: frozen-corpus A/B harness (offline, ab-model) =="
+AB_RES="$WORK/ab"
+AB_MODEL=ab-model AB_SLEEP=0 AB_BIN="$BIN" AB_RESULTS="$AB_RES" \
+  BRAIN_STATE_DIR="$AB_RES/state" \
+  bash "$HERE/ab/run-ab.sh" >"$WORK/ab.log" 2>&1 && RC=0 || RC=$?
+check "A/B runner completes"                 '[ "'"$RC"'" = "0" ]'
+check "30 result rows (15 fixtures x 2 arms)" '[ "$(wc -l < "$AB_RES/results.jsonl")" = "30" ]'
+check "all 15 pairs usable"                  'grep -q "pairs: 15 usable, 0 rows dropped" "$AB_RES/report.txt"'
+check "report shows exact offline output delta" 'grep -q -- "-66.7% median" "$AB_RES/report.txt"'
+check "report stratifies by task category"   'for c in review debug architecture implementation config; do grep -q "  $c (n=" "$AB_RES/report.txt" || exit 1; done'
+check "report labels small sample not claimable" 'grep -q "indicative, not a" "$AB_RES/report.txt"'
+check "runner refuses Claude models"         '! AB_MODEL=claude-fable AB_BIN="$BIN" bash "$HERE/ab/run-ab.sh" >/dev/null 2>&1'
+BRAIN_STATE_DIR="$AB_RES/state" "$BIN" compress savings > "$WORK/ab-sav.txt"
+check "savings prints per-arm ground truth"  'grep -q "control 15 calls: mean" "$WORK/ab-sav.txt"'
+check "savings suppresses delta under min samples" 'grep -q "delta suppressed (smallest arm 15<30" "$WORK/ab-sav.txt"'
+BRAIN_STATE_DIR="$AB_RES/state" "$BIN" compress savings --json > "$WORK/ab-sav.json"
+check "rollup splits output tokens per arm"  'grep -q "\"control_output_tokens\": 900" "$WORK/ab-sav.json" && grep -q "\"guarded_output_tokens\": 300" "$WORK/ab-sav.json"'
+check "rollup splits input tokens per arm"   'grep -q "\"control_input_tokens\": 1" "$WORK/ab-sav.json" && grep -q "\"guarded_input_tokens\": 1" "$WORK/ab-sav.json"'
+check "ground truth not claimable at n=15"   'grep -q "\"claimable\": false" "$WORK/ab-sav.json"'
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]

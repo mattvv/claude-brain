@@ -1,0 +1,33 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.4, pytest-8.2.0, pluggy-1.5.0
+collected 14 items
+
+tests/test_schedule.py ....F.
+tests/test_worker.py ...F....
+
+=================================== FAILURES ===================================
+______________________________ test_next_run_dst _______________________________
+
+    def test_next_run_dst():
+        tz = pytz.timezone("America/New_York")
+        base = datetime.datetime(2026, 3, 8, 1, 30, tzinfo=tz)
+>       nxt = schedule.next_run(base, every_minutes=60)
+E       DeprecationWarning: datetime.datetime.utcnow() is deprecated and
+E       scheduled for removal in a future version. Use timezone-aware objects
+E       to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+
+src/schedule.py:41: DeprecationWarning
+------------------------------ Captured log call -------------------------------
+WARNING  schedule:schedule.py:38 naive/aware comparison, coercing base to naive
+_______________________________ test_retry_backoff _____________________________
+
+    def test_retry_backoff():
+        w = worker.Worker(max_retries=3)
+>       assert w.backoff_seconds(3) == 8
+E       TypeError: can't compare offset-naive and offset-aware datetimes
+
+src/worker.py:88: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_schedule.py::test_next_run_dst - DeprecationWarning
+FAILED tests/test_worker.py::test_retry_backoff - TypeError
+========================= 2 failed, 12 passed in 1.94s =========================

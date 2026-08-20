@@ -1,0 +1,27 @@
+[service]
+name = "ingest"
+port = 8080
+workers = 4
+
+[logging]
+level = "debug"
+format = "json"
+targets = ["stdout", "file"]
+
+[logging.file]
+path = "/var/log/ingest/app.log"
+rotate_mb = 100
+
+[logging.production]
+level = "warn"
+
+[Logging.production.file]
+path = "/var/log/ingest/prod.log"
+
+[database]
+url = "postgres://ingest@db.internal/ingest"
+pool_size = 16
+
+[database.production]
+pool_size = 64
+statement_timeout_ms = 5000
