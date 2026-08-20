@@ -21,6 +21,7 @@ mod hook;
 mod http;
 mod ledger;
 mod shell;
+mod structured;
 mod util;
 
 use std::env;

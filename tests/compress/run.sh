@@ -233,6 +233,24 @@ printf '\n[dedup]\nenabled = false\n' >> "$BRAIN_STATE_DIR/compress/compress.tom
 ( cd "$HERE/../.." && "$BIN" shell -- git log -5 ) >"$WORK/dd.out" 2>/dev/null
 check "dedup.enabled=false disables elision" '! grep -q "output identical to" "$WORK/dd.out"'
 
+
+echo "== json projection =="
+python3 -c 'import json; print(json.dumps([{"service":"svc-%03d"%i,"port":8000+i,"healthy":i%2==0,"region":"us-east"} for i in range(40)], indent=2))' > "$WORK/big.json"
+"$BIN" json "$WORK/big.json" --table > "$WORK/j1.out" 2>/dev/null
+check "json --table renders markdown + header"  'grep -q "mode=table" "$WORK/j1.out" && grep -q "| service | port |" "$WORK/j1.out"'
+check "json header carries recovery"            'grep -q "recover: brain compress show" "$WORK/j1.out"'
+check "json table is smaller than raw"          '[ "$(wc -c < "$WORK/j1.out")" -lt "$(wc -c < "$WORK/big.json")" ]'
+JID="$(grep -oE "id=bc_[A-Z0-9]+" "$WORK/j1.out" | head -1 | sed s/id=//)"
+"$BIN" compress show "$JID" --full > "$WORK/jrec.out" 2>/dev/null
+check "json raw recovers exact bytes"           'diff -q "$WORK/jrec.out" "$WORK/big.json" >/dev/null'
+"$BIN" json "$WORK/big.json" --fields service,port > "$WORK/j2.out" 2>/dev/null
+check "json --fields marks omissions"           'grep -q "other fields omitted: 80 occurrences" "$WORK/j2.out"'
+check "json --fields keeps allowlisted values"  'grep -q "svc-007" "$WORK/j2.out" && ! grep -q "us-east" "$WORK/j2.out"'
+printf 'not json\n' | "$BIN" json - > "$WORK/j3.out" 2>"$WORK/j3.err"
+check "malformed json passes through unchanged" 'grep -q "not json" "$WORK/j3.out" && grep -q "passing through" "$WORK/j3.err"'
+printf '{"a":1}\n' | "$BIN" json - > "$WORK/j4.out" 2>"$WORK/j4.err"
+check "no-gain input passes through honestly"   'grep -q "no byte gain" "$WORK/j4.err" && [ "$(cat "$WORK/j4.out")" = "{\"a\":1}" ]'
+
 echo "== statusline savings segment =="
 SL="$HERE/../../droplet/claude/statusline.sh"
 SLIN='{"model":{"display_name":"T"},"cwd":"/tmp/x"}'
