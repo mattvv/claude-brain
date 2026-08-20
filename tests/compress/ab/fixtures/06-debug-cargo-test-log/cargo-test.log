@@ -1,0 +1,29 @@
+running 6 tests
+test config::tests::defaults_are_sane ... ok
+test store::tests::put_then_get ... ok
+test store::tests::eviction_respects_quota ... FAILED
+test store::tests::ttl_expiry ... ok
+test index::tests::rebuild_is_idempotent ... FAILED
+test index::tests::lookup_missing ... ok
+
+failures:
+
+---- store::tests::eviction_respects_quota stdout ----
+thread 'store::tests::eviction_respects_quota' panicked at src/store.rs:211:9:
+assertion `left == right` failed
+  left: 3
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- index::tests::rebuild_is_idempotent stdout ----
+thread 'index::tests::rebuild_is_idempotent' panicked at src/index.rs:74:13:
+called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists,
+message: "File exists" }
+note: test wrote scratch dir /tmp/index-test-scratch
+
+failures:
+    index::tests::rebuild_is_idempotent
+    store::tests::eviction_respects_quota
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out;
+finished in 0.31s

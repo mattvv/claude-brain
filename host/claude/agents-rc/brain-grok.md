@@ -18,7 +18,7 @@ EOF_PROMPT
 ```
 
 Rules:
-- The remote model sees ONLY what you send. For whole or partial files, pass them with `--context-file PATH` (or `--context-range PATH@START:END` for a slice of a large file) instead of reading and pasting them — `brain-ask` reads them itself, so their bytes never fill your own transcript. Inline only content that is not a file (command output, logs, a diff). Optionally add `--response review|debug|architecture|implementation|concise` to get a terser answer (and to record the call for savings measurement).
+- The remote model sees ONLY what you send. For whole or partial files, pass them with `--context-file PATH` (or `--context-range PATH@START:END` for a slice of a large file) instead of reading and pasting them — `brain-ask` reads them itself, so their bytes never fill your own transcript. Inline only content that is not a file (command output, logs, a diff). Optionally add `--response review|debug|architecture|implementation|concise` to get a terser answer (and to record the call for savings measurement). For `--response review` or `--response implementation`, ALSO pass `--effort low`: measured on this model (capabilities H13), it cuts output tokens ~80% with no loss of finding coverage — grok's default reasoning burn dominates those categories, not the answer itself.
 - One call per question when possible; for follow-ups, re-send the full context (the proxy is stateless).
 - If `brain-ask` fails, report the error and suggest `brain status` — do not retry more than once.
 - Always pass `--stream` so the consultation's output is visible live while it generates.

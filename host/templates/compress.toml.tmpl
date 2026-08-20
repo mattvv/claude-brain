@@ -42,3 +42,13 @@ consult_logs = 20
 read_guard = "observe"
 large_file_lines = 800
 large_file_bytes = 49152
+
+[explore]
+# `brain explore "QUESTION"` navigates the repo with a cheap model so the main
+# brain never reads files to orient itself. `models` is an ordered FALLBACK
+# CHAIN: explore tries each in turn and falls to the next when a model's vendor
+# isn't linked or the call fails. Must be non-Claude models. `brain explore
+# --model M` overrides the chain for a single run.
+models = "gpt-5.6-luna,grok-4.5"
+effort = "low"
+max_pack_bytes = 98304

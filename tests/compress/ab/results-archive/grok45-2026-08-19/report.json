@@ -1,0 +1,150 @@
+{
+  "pairs": 30,
+  "dropped": 0,
+  "truncated_calls": {
+    "control": 0,
+    "guarded": 0
+  },
+  "claim_threshold": 30,
+  "claimable": true,
+  "overall": {
+    "pairs": 30,
+    "in_abs": {
+      "median": 154.0,
+      "ci95": [
+        25.0,
+        171.5
+      ]
+    },
+    "out_abs": {
+      "median": -545.0,
+      "ci95": [
+        -1209.0,
+        2.0
+      ]
+    },
+    "in_pct": {
+      "median": 39.35589795402879
+    },
+    "out_pct": {
+      "median": -20.04143798046717
+    }
+  },
+  "categories": {
+    "architecture": {
+      "pairs": 4,
+      "in_abs": {
+        "median": 131.0,
+        "ci95": [
+          78.0,
+          206.0
+        ]
+      },
+      "out_abs": {
+        "median": -1877.0,
+        "ci95": [
+          -2645.0,
+          246.0
+        ]
+      },
+      "in_pct": {
+        "median": 35.27018053910484
+      },
+      "out_pct": {
+        "median": -54.94261276346414
+      }
+    },
+    "config": {
+      "pairs": 6,
+      "in_abs": {
+        "median": 167.0,
+        "ci95": [
+          -219.5,
+          419.0
+        ]
+      },
+      "out_abs": {
+        "median": -382.0,
+        "ci95": [
+          -1825.5,
+          2.0
+        ]
+      },
+      "in_pct": {
+        "median": 54.24141749723145
+      },
+      "out_pct": {
+        "median": -18.321259743831938
+      }
+    },
+    "debug": {
+      "pairs": 8,
+      "in_abs": {
+        "median": 94.0,
+        "ci95": [
+          -359.0,
+          175.0
+        ]
+      },
+      "out_abs": {
+        "median": -578.0,
+        "ci95": [
+          -4610.0,
+          -487.0
+        ]
+      },
+      "in_pct": {
+        "median": 21.999403855070543
+      },
+      "out_pct": {
+        "median": -25.989706935924417
+      }
+    },
+    "implementation": {
+      "pairs": 6,
+      "in_abs": {
+        "median": 85.0,
+        "ci95": [
+          -427.0,
+          219.0
+        ]
+      },
+      "out_abs": {
+        "median": -182.0,
+        "ci95": [
+          -2183.0,
+          1321.0
+        ]
+      },
+      "in_pct": {
+        "median": 22.93956043956044
+      },
+      "out_pct": {
+        "median": 4.594875920624821
+      }
+    },
+    "review": {
+      "pairs": 6,
+      "in_abs": {
+        "median": 219.0,
+        "ci95": [
+          -1171.5,
+          1644.5
+        ]
+      },
+      "out_abs": {
+        "median": 174.5,
+        "ci95": [
+          -1133.5,
+          7057.5
+        ]
+      },
+      "in_pct": {
+        "median": 39.45945945945946
+      },
+      "out_pct": {
+        "median": 6.736319976714854
+      }
+    }
+  }
+}

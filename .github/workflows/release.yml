@@ -1,0 +1,82 @@
+# Prebuilt release binaries (capabilities H7: the 1.9 GiB droplet must consume
+# pinned CI artifacts, not compile heavy dependency trees itself).
+#
+# Trigger: pushing a tag `v*` (or manual dispatch). Produces static musl
+# binaries for brain-compress and brain-symbols plus SHA256SUMS, attached to
+# the GitHub release for that tag. `brain update` / install.sh can then verify
+# and install them; until the first release exists the droplet keeps building
+# brain-compress locally (small dep tree) and treats brain-symbols as optional
+# (the lexical fallback stays marked).
+#
+# NOTE: this workflow is committed unexercised — it cannot run until the
+# branch is pushed. Validated locally with `python3 -c yaml.safe_load` and
+# actionlint where available.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install Rust target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add "$TARGET"
+
+      - name: Build brain-compress (release, static)
+        working-directory: host/native/brain-compress
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --target "$TARGET"
+
+      - name: Build brain-symbols (release, static)
+        working-directory: host/native/brain-symbols
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --target "$TARGET"
+
+      - name: Collect + checksum
+        run: |
+          mkdir -p dist
+          cp "host/native/brain-compress/target/$TARGET/release/brain-compress" \
+             "dist/brain-compress-$TARGET"
+          cp "host/native/brain-symbols/target/$TARGET/release/brain-symbols" \
+             "dist/brain-symbols-$TARGET"
+          cd dist && sha256sum ./* > SHA256SUMS
+
+      - name: Smoke test (static binaries run anywhere)
+        run: |
+          "./dist/brain-compress-$TARGET" compress help >/dev/null
+          "./dist/brain-symbols-$TARGET" langs
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --verify-tag \
+            --title "${GITHUB_REF_NAME}" --notes "Prebuilt binaries (musl, x86_64)." \
+            dist/* 2>/dev/null || gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+
+      - name: Upload workflow artifacts (dispatch runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-x86_64-musl
+          path: dist/

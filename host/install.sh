@@ -61,6 +61,27 @@ if command -v cargo >/dev/null 2>&1 && [ -f "$CRATE_DIR/Cargo.toml" ]; then
   fi
 fi
 
+# brain-symbols (tree-sitter symbol helper) is OPTIONAL: without it, symbol
+# commands degrade to a clearly marked lexical fallback. Preferred delivery is
+# the prebuilt musl artifact from the GitHub release (H7 — see
+# .github/workflows/release.yml); installing from a release is wired into
+# `brain update` once the first release exists. As a stopgap, install a local
+# dev build if one is already present (never build it here: the grammar C
+# compile is exactly what H7 keeps off constrained hosts during install).
+SYM_CRATE="$REPO_DIR/host/native/brain-symbols"
+SYM_VENDOR="$HOME/.local/share/brain/vendor/brain-symbols"
+if [ -f "$SYM_CRATE/Cargo.toml" ]; then
+  sym_version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$SYM_CRATE/Cargo.toml" | head -1)"
+  for candidate in "$SYM_CRATE/target/release/brain-symbols" "$SYM_CRATE/target/debug/brain-symbols"; do
+    if [ -x "$candidate" ] && [ ! -x "$SYM_VENDOR/$sym_version/brain-symbols" ]; then
+      mkdir -p "$SYM_VENDOR/$sym_version"
+      install -m 755 "$candidate" "$SYM_VENDOR/$sym_version/brain-symbols"
+      echo "brain-symbols $sym_version installed (local build)"
+      break
+    fi
+  done
+fi
+
 # Seed the compression config (observe-only) if the user has none yet.
 COMPRESS_DIR="$HOME/.local/state/brain/compress"
 mkdir -p "$COMPRESS_DIR"

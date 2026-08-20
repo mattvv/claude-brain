@@ -1,0 +1,19 @@
+--- a/billing/charge.py
++++ b/billing/charge.py
+@@ -12,10 +12,14 @@ def charge_order(order_id):
+     order = db.get_order(order_id)
+     if order.status == "charged":
+         return order.receipt_id
+-    receipt = gateway.charge(order.customer_token, order.total_cents)
+-    order.status = "charged"
+-    order.receipt_id = receipt.id
+-    db.save(order)
++    with db.transaction():
++        order = db.get_order(order_id, for_update=True)
++        if order.status == "charged":
++            return order.receipt_id
++        receipt = gateway.charge(order.customer_token, order.total_cents)
++        order.status = "charged"
++        order.receipt_id = receipt.id
++        db.save(order)
+     return receipt.id

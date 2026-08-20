@@ -1,0 +1,26 @@
+Frozen-corpus A/B — provider ground-truth usage (guarded vs control, paired)
+pairs: 30 usable, 0 rows dropped
+provider model(s): gpt-5.6-luna
+
+overall
+  all categories (n=30 pairs)
+    output tokens/call: median delta -346.5 (-33.9% median), 95% CI [-841.0, -192.0]
+    input tokens/call : median delta +100.0 (+17.1% median), 95% CI [+98.0, +101.0]
+
+by task category
+  architecture (n=4 pairs)
+    output tokens/call: median delta -933.5 (-70.7% median), 95% CI [-1252.0, -622.0]
+    input tokens/call : median delta +107.5 (+17.8% median), 95% CI [+91.0, +124.0]
+  config (n=6 pairs)
+    output tokens/call: median delta -195.0 (-33.9% median), 95% CI [-748.0, -135.5]
+    input tokens/call : median delta +101.0 (+19.7% median), 95% CI [+100.0, +103.0]
+  debug (n=8 pairs)
+    output tokens/call: median delta -200.0 (-22.0% median), 95% CI [-316.0, -183.0]
+    input tokens/call : median delta +98.0 (+16.0% median), 95% CI [+97.5, +98.0]
+  implementation (n=6 pairs)
+    output tokens/call: median delta -269.0 (-29.9% median), 95% CI [-1323.0, +383.5]
+    input tokens/call : median delta +100.0 (+18.6% median), 95% CI [+97.0, +100.0]
+  review (n=6 pairs)
+    output tokens/call: median delta -1546.0 (-51.8% median), 95% CI [-2230.5, -488.0]
+    input tokens/call : median delta +105.0 (+14.5% median), 95% CI [-790.5, +105.5]
+

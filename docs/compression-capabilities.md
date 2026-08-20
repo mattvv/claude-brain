@@ -147,3 +147,165 @@ Code captures stderr into the tool result, so this must be suppressed (rate-limi
 | §2.10 Level 1/2 cache | **Defer.** Unverifiable on this proxy (H4). |
 | §5 measurement | **Confirmed viable.** Real `usage` is available (H3); record the fixed prefix (H5). |
 | Stage 4B tree-sitter | **At risk** on this hardware (H7). |
+
+## H8 — Server-side context compaction: NOT exposed by Claude Code 2.1.235 ❌
+
+Probed 2026-08-20 (plan Appendix D / next-phase P2) by string-analysis of the installed
+Claude Code bundle (`~/.local/share/claude/versions/2.1.235`) plus the bundled claude-api
+skill docs. The API feature itself is real: beta `compact-2026-01-12`, request param
+`context_management: {edits: [{type: "compact_20260112"}]}` on `/v1/messages`
+(Opus/Sonnet 4.6+ and Fable/Opus/Sonnet 5), and the client must echo the returned
+`compaction` blocks back on subsequent turns.
+
+What 2.1.235 actually contains:
+
+| Layer | Server-side compaction support |
+|---|---|
+| Bundled TS SDK | **Full** — streams `compaction`/`compaction_delta` blocks; `toolRunner`'s old client-side `compactionControl` is deprecated in favor of `edits: [{type: "compact_20260112"}]` |
+| Harness request path | **None** — no code site constructs `context_management` in a main-loop request; no `applied_edits` handling anywhere |
+| Escape hatches | `ANTHROPIC_BETAS` (comma-separated list appended to the CLI's own `anthropic-beta` header) and `ANTHROPIC_CUSTOM_HEADERS` both exist and are live |
+
+**Consequence:** the escape hatches can inject the `compact-2026-01-12` header into the
+brain session's own requests, but the header alone is inert — compaction activates only
+via the `context_management.edits` request param, which the harness never sends. Claude
+Code's history management in 2.1.235 remains entirely client-side (`/compact`,
+auto-compact via the `autoCompactWindow` setting / `CLAUDE_CODE_AUTO_COMPACT_WINDOW`,
+microcompact, PreCompact hooks), which is already on by default.
+
+**Decision:** nothing to wire (per the P2 rule: never hand-roll history compaction).
+Setting `ANTHROPIC_BETAS=compact-2026-01-12` is recorded here as tried-and-understood but
+NOT configured — it cannot help and any behavioral verification would burn rate-limited
+Claude quota. Re-probe on each Claude Code upgrade: the moment the harness starts sending
+`context_management` edits (grep the bundle for `context_management:{` and
+`applied_edits`), token-map surface #8 becomes a config flip instead of a build.
+
+## H9 — Measured A/B savings, frozen corpus vs grok-4.5 (2026-08-19/20) ✅
+
+First end-to-end ground-truth measurement of the Stage 3/4A guards
+(`--response` profile + `--context-file` pack) via `tests/compress/ab/`:
+15 frozen fixtures x 2 reps x 2 arms = 60 grok-4.5 calls (30/arm — the plan's
+minimum claim threshold), randomized order, paired per fixture+rep. All 60
+succeeded; **0 truncated (max_tokens), 0 dropped pairs**. Raw evidence:
+`tests/compress/ab/results-archive/grok45-2026-08-19/`.
+
+Paired medians (guarded − control), bootstrap 95% CI on the absolute median:
+
+| Category (pairs) | output tokens/call | input tokens/call |
+|---|---|---|
+| **overall (30)** | **−545 (−20.0%), CI [−1209, +2]** | **+154 (+39.4%), CI [+25, +172]** |
+| debug (8) | −578 (−26.0%), CI [−4610, −487] | +94 (+22.0%) |
+| architecture (4) | −1877 (−54.9%), CI [−2645, +246] | +131 (+35.3%) |
+| config (6) | −382 (−18.3%), CI [−1826, +2] | +167 (+54.2%) |
+| implementation (6) | −182 abs (+4.6% median pct), CI [−2183, +1321] | +85 (+22.9%) |
+| review (6) | **+175 (+6.7%)**, CI [−1134, +7058] | +219 (+39.5%) |
+
+The same arms through the normal CLI (arm means from the per-arm rollup split):
+`brain compress savings` on the run's state dir reports control 30 calls,
+mean 429 in / 4,048 out vs guarded 30 calls, mean 511 in / 3,346 out —
+output −17.4%, input +19.1% per call.
+
+**What this honestly supports:**
+- **debug is the only category whose CI excludes zero** — the `debug` profile
+  reliably cuts generated tokens (−26% median) on grok-4.5. Architecture and
+  config point the same way but are underpowered (n=4/6).
+- **The `review` and `implementation` profiles do NOT cut grok-4.5 output**
+  (review trends positive: "report only findings, file:line each" appears to
+  make grok enumerate at length). Re-tune those profile instructions (P3
+  material) before claiming anything for them.
+- **Guarded costs real vendor input**: +154 tokens/call median — the context
+  pack's line-number prefixes, framing, and the profile instruction. The pack's
+  purpose is keeping file bytes out of the bridge's Claude transcript (the #1
+  surface), not saving vendor input; that transcript saving is accounted
+  separately as measured bytes. Per the accounting rules these numbers are
+  never netted against each other.
+- Single vendor (grok-4.5), small per-category n, output counts include grok's
+  reasoning tokens (high variance — the wide CIs are real). Re-run the same
+  frozen corpus against gpt-5.6-luna before generalizing across vendors.
+
+## H10 — Follow-up A/B after the two H9 fixes (grok-4.5, 30 pairs, 2026-08-20)
+
+Re-ran the full frozen corpus after (a) sending whole `--context-file` bodies unnumbered and
+(b) re-tuning the `review`/`implementation` profiles. Results:
+
+- **Context-pack input fix WORKED (kept).** Overall guarded input dropped **+39.4% → +25.4%**;
+  `config` input flipped from **+54% to −24%** (guarded now sends *less* than control). The
+  unnumbering removed the per-line prefix overhead exactly as predicted.
+- **Profile re-tune FAILED (reverted).** `review` stayed noise (+3.2%). `implementation`
+  *regressed* to +50% median — driven by one fixture (`10-impl-followup-diff`) where
+  "output ONLY a unified diff" made grok emit a 3× larger diff (control ~2,600 out vs guarded
+  ~7,800). Confirms these categories are **output-bound by the model's reasoning/verbosity, not
+  by instruction wording**; the wording was reverted to the stable baseline.
+- **Unchanged, solid wins (output):** architecture −38.8% (CI [−1898, −784]), config −31.2%
+  (CI excludes zero), debug −19.6% (CI excludes zero). Overall output −17.3%.
+
+Takeaway: response profiles help debug/config/architecture output and the context-pack fix
+removed the input regression; review/implementation need a *different* lever (separate profiles
+proven against `concise`, or a cheaper model / lower effort), not re-wording — see
+docs/compression-techniques.md.
+
+## H11 — Hook payloads carry `session_id`, `transcript_path`, and `cwd` ✅
+
+Probed 2026-08-20 in the Claude Code 2.1.235 bundle: the hook payload builder
+constructs `{session_id: e.id, transcript_path: Gz(e.id), cwd: t, prompt_id,
+permission_mode, agent_id, …}` as the base for every hook event before the
+event-specific fields (`hook_event_name`, `tool_name`, `tool_input`, …) are
+merged in. Session-scoped features (duplicate-result elision) can therefore
+key on `session_id` from the PreToolUse hooks; the elision keeps a same-cwd +
+time-window fallback for invocations that arrive without a hook (manual runs,
+bridges). Session transcripts live at
+`~/.claude/projects/<flattened-cwd>/<session-uuid>.jsonl` (JSONL; lines carry
+`sessionId`/`timestamp`/`type`/`content`) — the substrate for `recall`; the
+format is undocumented and must be parsed defensively.
+
+## H12 — Cross-vendor A/B: the guards work EVERYWHERE on gpt-5.6-luna ✅
+
+Full frozen corpus vs gpt-5.6-luna, 2026-08-20 (30 pairs, 2 reps, 0 failures,
+0 truncations; raw evidence tests/compress/ab/results-archive/luna-2026-08-20/).
+Paired medians, guarded − control:
+
+| Category (pairs) | output tokens/call | input tokens/call |
+|---|---|---|
+| **overall (30)** | **−346 (−33.9%), CI [−841, −192]** | +100 (+17.1%) |
+| review (6) | **−1546 (−51.8%), CI [−2231, −488]** | +105 (+14.5%) |
+| architecture (4) | −934 (−70.7%), CI [−1252, −622] | +108 (+17.8%) |
+| config (6) | −195 (−33.9%), CI [−748, −136] | +101 (+19.7%) |
+| debug (8) | −200 (−22.0%), CI [−316, −183] | +98 (+16.0%) |
+| implementation (6) | −269 (−29.9%), CI wide | +100 (+18.6%) |
+
+Overall CI excludes zero, and — decisive for H10 — **the `review` profile that
+does nothing on grok-4.5 cuts luna output by half**. H10's diagnosis is
+confirmed: review/implementation were output-bound by grok's reasoning
+behavior specifically, not by the profile wording. The right lever is model
+routing (send review consults to a GPT-family model) and/or grok effort
+(measured separately), not more wording changes. Guarded input overhead is a
+steady ~+100 tokens/call (context-pack framing + profile instruction) on this
+corpus's small fixtures.
+
+## H13 — Effort lever SOLVES the grok review/implementation problem ✅
+
+Variant-arm A/B on the H10 problem categories (review + implementation
+fixtures, grok-4.5, 2 reps, variants control / guarded / guard-low
+(`--effort low`) / guard-med, 2026-08-20; one provider stall dropped honestly;
+evidence tests/compress/ab/results-archive/grok45-effort-2026-08-20/).
+Paired medians:
+
+| Comparison (11-12 pairs) | output tokens/call |
+|---|---|
+| guarded vs control | +53.3%, CI crosses zero — profiles alone still no-op/hurt (H10 reconfirmed) |
+| **guard-low vs guarded** | **−2560 (−83.1%), CI [−4659, −1917]** |
+| **guard-low vs control** | **−2408 (−78.0%), CI [−3045, −1802]** |
+| guard-med vs guarded | −7.3%, CI crosses zero — medium is not a lever |
+
+Input tokens are flat across effort levels (the lever cuts grok's reasoning
+burn, which its output_tokens include).
+
+**Quality spot-check (promotion rule):** on the seeded-bug review fixture the
+guard-low answer (304 output tokens) reported ALL five seeded issues (SQL
+injection, mutable default, missing commit, shell=True injection, debug=True)
+plus two genuine extras, as a findings-only list — the same coverage the
+2,059-token guarded answer had.
+
+**Promoted:** grok-4.5 consults using `--response review|implementation`
+should pass `--effort low` (wired into the bridge agent docs / routing
+guidance). Together with H12 the H10 problem has two proven fixes: route
+review to a GPT-family model, or keep grok and drop effort to low.

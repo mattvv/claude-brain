@@ -50,7 +50,7 @@ Inventory from reading the tree — every one of these is a blocker for a local 
 |---|---|
 | `setup.sh` (whole file) | doctl, droplet create, SSH key import, `ssh brain@IP` handoff |
 | `cloud-init.yaml` | DO-only bootstrap: mirrors `/root/.ssh/authorized_keys`, `ufw`, `loginctl enable-linger`, Go **linux-amd64** tarball, gh apt repo, apt packages |
-| `droplet/` (tree name) | the entire product lives under a cloud-vendor noun |
+| `host/` (tree name) | the entire product lives under a cloud-vendor noun |
 | `host/lib/common.sh:8` | `BRAIN_REPO_DIR` defaults to `$HOME/claude-brain` — a hardcoded clone location |
 | `host/lib/common.sh:3` | "Targets Ubuntu (bash + GNU coreutils) only" |
 | `host/lib/common.sh:111,134`, `host/claude/statusline.sh:18,22` | `stat -Lc` — GNU only, fails on macOS |
@@ -83,7 +83,7 @@ claude-brain/
   setup.sh                # shim → install.sh --digitalocean (back-compat for the old curl line)
   cloud-init.yaml         # slimmed: create user, clone, call host/bootstrap.sh --profile droplet
   droplet -> host         # compat symlink, one release only (see risk 1)
-  host/                   # was droplet/
+  host/                   # was host/
     bootstrap.sh          # NEW dependency installer (brew | pacman | apt | dnf)
     install.sh            # existing wiring, now platform-aware + backs up ~/.claude
     lib/common.sh
