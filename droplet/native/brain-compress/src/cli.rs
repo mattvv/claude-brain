@@ -35,6 +35,11 @@ pub async fn run(args: Vec<String>) -> i32 {
             passthrough.extend(rest.iter().cloned());
             return crate::files::run(passthrough).await;
         }
+        // `shell` and `hook` are primarily invoked as `brain-compress shell …`
+        // (by the hook) but are routed here too so `brain compress shell …`
+        // works for manual use.
+        "shell" => return crate::shell::run(rest.to_vec()).await,
+        "hook" => return crate::hook::run(rest.to_vec()).await,
         "doctor" => cmd_doctor().await,
         "help" | "--help" | "-h" => {
             print_help();
