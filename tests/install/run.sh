@@ -49,8 +49,15 @@ check "plans core tools"           'printf %s "$DRY" | grep -qE "(install|brew i
 check "no droplet hardening on a local profile" \
   '! printf %s "$DRY" | grep -qE "ufw|enable-linger"'
 DRY_DROPLET="$(bash "$REPO/host/bootstrap.sh" --dry-run --profile droplet 2>&1)"
-check "droplet profile does harden" \
-  'printf %s "$DRY_DROPLET" | grep -q "ufw" && printf %s "$DRY_DROPLET" | grep -q "enable-linger"'
+if [ "$(uname -s)" = Linux ]; then
+  check "droplet profile hardens on Linux" \
+    'printf %s "$DRY_DROPLET" | grep -q "ufw" && printf %s "$DRY_DROPLET" | grep -q "enable-linger"'
+else
+  # There is no ufw or systemd here; a droplet profile on a Mac is a mistake,
+  # not a target, and bootstrap must not pretend otherwise.
+  check "droplet hardening is skipped off Linux" \
+    '! printf %s "$DRY_DROPLET" | grep -qE "ufw|enable-linger"'
+fi
 
 echo "== host/install.sh is a good guest =="
 # A personal machine that already has a statusline and a hook of its own.
@@ -115,6 +122,22 @@ check "no unrendered placeholders"  '! grep -q "__[A-Z_]*__" "$H2/.claude/CLAUDE
 HOME="$H2" bash "$REPO/host/bin/brain" config scope machine >/dev/null 2>&1
 check "machine scope says so"       'grep -q "Scope: the whole machine" "$H2/.claude/CLAUDE.md"'
 check "local block is the local one" 'grep -q "this is someone.s own computer" "$H2/.claude/CLAUDE.md"'
+
+echo "== ops block renders under a BSD awk =="
+# macOS ships one-true-awk, which errors on a newline inside `awk -v` — that
+# left a Mac with no ops instructions at all. On macOS this is just `awk`; on
+# Linux it needs the original-awk package, so it is a no-op when absent.
+OTA="$(command -v original-awk 2>/dev/null || true)"
+[ "$(uname -s)" = Darwin ] && OTA="$(command -v awk)"
+if [ -n "$OTA" ]; then
+  SHIM="$TMP/awkshim"; mkdir -p "$SHIM"; ln -sf "$OTA" "$SHIM/awk"
+  rm -f "$H2/.claude/CLAUDE.md"
+  PATH="$SHIM:$PATH" HOME="$H2" bash "$REPO/host/bin/brain" config scope workspace "$H2/work" >/dev/null 2>&1
+  check "ops block still lands"        'grep -q "Stay in your workspace" "$H2/.claude/CLAUDE.md"'
+  check "and is fully rendered"        '! grep -q "__[A-Z_]*__" "$H2/.claude/CLAUDE.md"'
+else
+  printf '  \033[33mskip\033[0m one-true-awk not installed (apt install original-awk)\n'
+fi
 
 echo "== uninstall puts it back =="
 printf 'y\n' | HOME="$H" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1

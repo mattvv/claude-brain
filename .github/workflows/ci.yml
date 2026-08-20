@@ -38,7 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y jq
+      # original-awk is the one-true-awk macOS ships. Installing it here lets
+      # the installer suite check the ops block renders under a BSD awk on
+      # Linux too, instead of only when the macOS job runs.
+      - run: sudo apt-get update && sudo apt-get install -y jq original-awk
       - run: tests/platform/run.sh
       - run: tests/install/run.sh
 
