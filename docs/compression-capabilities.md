@@ -256,3 +256,27 @@ bridges). Session transcripts live at
 `~/.claude/projects/<flattened-cwd>/<session-uuid>.jsonl` (JSONL; lines carry
 `sessionId`/`timestamp`/`type`/`content`) — the substrate for `recall`; the
 format is undocumented and must be parsed defensively.
+
+## H12 — Cross-vendor A/B: the guards work EVERYWHERE on gpt-5.6-luna ✅
+
+Full frozen corpus vs gpt-5.6-luna, 2026-08-20 (30 pairs, 2 reps, 0 failures,
+0 truncations; raw evidence tests/compress/ab/results-archive/luna-2026-08-20/).
+Paired medians, guarded − control:
+
+| Category (pairs) | output tokens/call | input tokens/call |
+|---|---|---|
+| **overall (30)** | **−346 (−33.9%), CI [−841, −192]** | +100 (+17.1%) |
+| review (6) | **−1546 (−51.8%), CI [−2231, −488]** | +105 (+14.5%) |
+| architecture (4) | −934 (−70.7%), CI [−1252, −622] | +108 (+17.8%) |
+| config (6) | −195 (−33.9%), CI [−748, −136] | +101 (+19.7%) |
+| debug (8) | −200 (−22.0%), CI [−316, −183] | +98 (+16.0%) |
+| implementation (6) | −269 (−29.9%), CI wide | +100 (+18.6%) |
+
+Overall CI excludes zero, and — decisive for H10 — **the `review` profile that
+does nothing on grok-4.5 cuts luna output by half**. H10's diagnosis is
+confirmed: review/implementation were output-bound by grok's reasoning
+behavior specifically, not by the profile wording. The right lever is model
+routing (send review consults to a GPT-family model) and/or grok effort
+(measured separately), not more wording changes. Guarded input overhead is a
+steady ~+100 tokens/call (context-pack framing + profile instruction) on this
+corpus's small fixtures.
