@@ -38,9 +38,9 @@ fi
 # stale (>7 days) or absent. Never rendered as a bare unlabelled number.
 summary="$state/compress/summary.txt"
 if [ -r "$summary" ]; then
-  read -r saved_bytes est_tokens samples updated < <(
+  read -r est_tokens samples updated < <(
     awk 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"=");v[kv[1]]=kv[2]}
-         print v["saved_bytes"]+0, v["estimated_tokens"]+0, v["compressed_samples"]+0, v["updated_at"]+0}' \
+         print v["estimated_tokens"]+0, v["compressed_samples"]+0, v["updated_at"]+0}' \
       "$summary" 2>/dev/null
   ) || true
   min_samples="$(sed -n 's/^ *minimum_claim_samples *= *\([0-9][0-9]*\).*/\1/p' \
