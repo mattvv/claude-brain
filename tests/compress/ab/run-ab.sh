@@ -56,20 +56,30 @@ fi
 mkdir -p "$AB_RESULTS" "$BRAIN_STATE_DIR"
 RESULTS_JSONL="$AB_RESULTS/results.jsonl"
 LEDGER="$BRAIN_STATE_DIR/compress/ledger.jsonl"
-: > "$RESULTS_JSONL"
+if [ -z "${AB_TASKS_FILE:-}" ]; then
+  : > "$RESULTS_JSONL"
+else
+  touch "$RESULTS_JSONL"
+fi
 
-# Build the randomized task list: fixture x rep x arm.
+# Build the randomized task list: fixture x rep x arm. AB_TASKS_FILE overrides
+# it (used to resume an interrupted run: pass the not-yet-done tail of the
+# original tasks.txt; result rows append to the existing results.jsonl).
 TASKS="$AB_RESULTS/tasks.txt"
-: > "$TASKS"
-for rep in $(seq 1 "$AB_REPS"); do
-  for dir in "$FIXTURES"/*/; do
-    name="$(basename "$dir")"
-    [ -f "$dir/fixture.json" ] || continue
-    echo "$name $rep control" >> "$TASKS"
-    echo "$name $rep guarded" >> "$TASKS"
+if [ -n "${AB_TASKS_FILE:-}" ]; then
+  cp "$AB_TASKS_FILE" "$TASKS"
+else
+  : > "$TASKS"
+  for rep in $(seq 1 "$AB_REPS"); do
+    for dir in "$FIXTURES"/*/; do
+      name="$(basename "$dir")"
+      [ -f "$dir/fixture.json" ] || continue
+      echo "$name $rep control" >> "$TASKS"
+      echo "$name $rep guarded" >> "$TASKS"
+    done
   done
-done
-shuf "$TASKS" -o "$TASKS"
+  shuf "$TASKS" -o "$TASKS"
+fi
 TOTAL="$(wc -l < "$TASKS")"
 if [ "$TOTAL" -eq 0 ]; then
   echo "run-ab: no fixtures found under $FIXTURES" >&2
