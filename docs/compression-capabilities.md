@@ -147,3 +147,34 @@ Code captures stderr into the tool result, so this must be suppressed (rate-limi
 | §2.10 Level 1/2 cache | **Defer.** Unverifiable on this proxy (H4). |
 | §5 measurement | **Confirmed viable.** Real `usage` is available (H3); record the fixed prefix (H5). |
 | Stage 4B tree-sitter | **At risk** on this hardware (H7). |
+
+## H8 — Server-side context compaction: NOT exposed by Claude Code 2.1.235 ❌
+
+Probed 2026-08-20 (plan Appendix D / next-phase P2) by string-analysis of the installed
+Claude Code bundle (`~/.local/share/claude/versions/2.1.235`) plus the bundled claude-api
+skill docs. The API feature itself is real: beta `compact-2026-01-12`, request param
+`context_management: {edits: [{type: "compact_20260112"}]}` on `/v1/messages`
+(Opus/Sonnet 4.6+ and Fable/Opus/Sonnet 5), and the client must echo the returned
+`compaction` blocks back on subsequent turns.
+
+What 2.1.235 actually contains:
+
+| Layer | Server-side compaction support |
+|---|---|
+| Bundled TS SDK | **Full** — streams `compaction`/`compaction_delta` blocks; `toolRunner`'s old client-side `compactionControl` is deprecated in favor of `edits: [{type: "compact_20260112"}]` |
+| Harness request path | **None** — no code site constructs `context_management` in a main-loop request; no `applied_edits` handling anywhere |
+| Escape hatches | `ANTHROPIC_BETAS` (comma-separated list appended to the CLI's own `anthropic-beta` header) and `ANTHROPIC_CUSTOM_HEADERS` both exist and are live |
+
+**Consequence:** the escape hatches can inject the `compact-2026-01-12` header into the
+brain session's own requests, but the header alone is inert — compaction activates only
+via the `context_management.edits` request param, which the harness never sends. Claude
+Code's history management in 2.1.235 remains entirely client-side (`/compact`,
+auto-compact via the `autoCompactWindow` setting / `CLAUDE_CODE_AUTO_COMPACT_WINDOW`,
+microcompact, PreCompact hooks), which is already on by default.
+
+**Decision:** nothing to wire (per the P2 rule: never hand-roll history compaction).
+Setting `ANTHROPIC_BETAS=compact-2026-01-12` is recorded here as tried-and-understood but
+NOT configured — it cannot help and any behavioral verification would burn rate-limited
+Claude quota. Re-probe on each Claude Code upgrade: the moment the harness starts sending
+`context_management` edits (grep the bundle for `context_management:{` and
+`applied_edits`), token-map surface #8 becomes a config flip instead of a build.
