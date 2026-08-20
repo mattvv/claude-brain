@@ -1,0 +1,23 @@
+Frozen-corpus A/B — provider ground-truth usage (guarded vs control, paired)
+pairs: 11 usable, 2 rows dropped (see below)
+rows from other variants (ignored): 24
+provider model(s): grok-4.5
+
+overall
+  all categories (n=11 pairs)
+    output tokens/call: median delta +1318.0 (+53.3% median), 95% CI [-910.0, +2783.0]
+    input tokens/call : median delta -16.0 (-2.3% median), 95% CI [-400.0, +105.0]
+
+by task category
+  implementation (n=5 pairs)
+    output tokens/call: median delta +1708.0 (+85.4% median), 95% CI [-96.0, +2783.0]
+    input tokens/call : median delta +102.0 (+20.7% median), 95% CI [-410.0, +105.0]
+  review (n=6 pairs)
+    output tokens/call: median delta -601.5 (-19.8% median), 95% CI [-1296.5, +6988.5]
+    input tokens/call : median delta -16.0 (-12.4% median), 95% CI [-1360.0, +176.0]
+
+NOTE: 11 pairs < 30 per arm — treat these numbers as indicative, not a
+claimable saving (plan §5.3 minimum claim threshold).
+dropped rows:
+  12-impl-followup-rename rep=2 guarded — non-zero exit; usage missing
+  12-impl-followup-rename rep=2 control — unpaired (other variant unusable)

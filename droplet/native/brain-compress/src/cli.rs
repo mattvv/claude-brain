@@ -30,6 +30,10 @@ pub async fn run(args: Vec<String>) -> i32 {
         "show" => cmd_show(rest),
         "gc" => cmd_gc(rest),
         "discover" => cmd_discover(rest),
+        "json" => return crate::structured::run(rest.to_vec()).await,
+        "explore" => return crate::explore::run(rest.to_vec()).await,
+        "refs" => return crate::symbols::refs(rest.to_vec()).await,
+        "recall" => return crate::recall::run(rest.to_vec()).await,
         "read" | "grep" | "tree" => {
             let mut passthrough = vec![command.to_string()];
             passthrough.extend(rest.iter().cloned());
@@ -198,15 +202,49 @@ fn cmd_savings(rest: &[String]) -> Result<(), String> {
 }
 
 fn print_savings_block(totals: &Totals, config: &Config) {
-    // ground truth
+    // ground truth — provider-reported tokens, split per experiment arm. The
+    // arms are compared, never merged; the delta only prints once both arms
+    // clear the minimum sample size. Means come from rollup sums; for medians
+    // and confidence intervals use the paired A/B harness (tests/compress/ab).
     if totals.guarded_calls == 0 {
         println!("  ground truth      n/a — needs control/guarded arms (0 guarded calls so far)");
-    } else {
+    } else if totals.control_calls == 0 {
         println!(
-            "  ground truth      {} guarded vs {} control calls (compare input tokens)",
+            "  ground truth      n/a — {} guarded calls but 0 control calls to compare against",
             grouped_u64(totals.guarded_calls),
-            grouped_u64(totals.control_calls),
         );
+    } else {
+        let per_call = |tokens: u64, calls: u64| tokens as f64 / calls as f64;
+        let control_out = per_call(totals.control_output_tokens, totals.control_calls);
+        let guarded_out = per_call(totals.guarded_output_tokens, totals.guarded_calls);
+        let control_in = per_call(totals.control_input_tokens, totals.control_calls);
+        let guarded_in = per_call(totals.guarded_input_tokens, totals.guarded_calls);
+        println!(
+            "  ground truth      control {} calls: mean {:.0} in / {:.0} out tok — guarded {} calls: mean {:.0} in / {:.0} out tok",
+            grouped_u64(totals.control_calls),
+            control_in,
+            control_out,
+            grouped_u64(totals.guarded_calls),
+            guarded_in,
+            guarded_out,
+        );
+        let smallest_arm = totals.control_calls.min(totals.guarded_calls);
+        if smallest_arm < config.minimum_claim_samples {
+            println!(
+                "                    delta suppressed (smallest arm {}<{} calls)",
+                grouped_u64(smallest_arm),
+                grouped_u64(config.minimum_claim_samples),
+            );
+        } else {
+            let delta = |control: f64, guarded: f64| {
+                if control > 0.0 { (guarded - control) / control * 100.0 } else { 0.0 }
+            };
+            println!(
+                "                    guarded vs control per call: output {:+.1}%, input {:+.1}% (means; medians via tests/compress/ab)",
+                delta(control_out, guarded_out),
+                delta(control_in, guarded_in),
+            );
+        }
     }
     // measured bytes
     let observed = totals.compressed_raw;
@@ -244,6 +282,10 @@ struct Totals {
     guarded_calls: u64,
     provider_input_tokens: u64,
     provider_output_tokens: u64,
+    control_input_tokens: u64,
+    control_output_tokens: u64,
+    guarded_input_tokens: u64,
+    guarded_output_tokens: u64,
     proxy_prefix_tokens_estimate: u64,
     prompt_observed: u64,
     response_observed: u64,
@@ -263,6 +305,10 @@ impl Totals {
             totals.guarded_calls += cell.guarded_calls;
             totals.provider_input_tokens += cell.provider_input_tokens;
             totals.provider_output_tokens += cell.provider_output_tokens;
+            totals.control_input_tokens += cell.control_input_tokens;
+            totals.control_output_tokens += cell.control_output_tokens;
+            totals.guarded_input_tokens += cell.guarded_input_tokens;
+            totals.guarded_output_tokens += cell.guarded_output_tokens;
             totals.proxy_prefix_tokens_estimate += cell.proxy_prefix_tokens_estimate;
             totals.compressed_events += cell.compressed_events;
             totals.compressed_raw += cell.compressed_raw_bytes;
@@ -304,8 +350,13 @@ fn snapshot_json(snapshot: &Snapshot, window: Window, config: &Config) -> String
             "guarded_calls": totals.guarded_calls,
             "provider_input_tokens": totals.provider_input_tokens,
             "provider_output_tokens": totals.provider_output_tokens,
-            "proxy_prefix_tokens_estimate": totals.proxy_prefix_tokens_estimate,
-            "comparable": totals.guarded_calls > 0
+            "control_input_tokens": totals.control_input_tokens,
+            "control_output_tokens": totals.control_output_tokens,
+            "guarded_input_tokens": totals.guarded_input_tokens,
+            "guarded_output_tokens": totals.guarded_output_tokens,
+            "comparable": totals.guarded_calls > 0,
+            "claimable": totals.control_calls.min(totals.guarded_calls) >= config.minimum_claim_samples,
+            "proxy_prefix_tokens_estimate": totals.proxy_prefix_tokens_estimate
         },
         "measured_bytes": {
             "compressed_events": totals.compressed_events,
@@ -340,6 +391,10 @@ fn cell_json(cell: &RollupCell) -> serde_json::Value {
         "saved_bytes": cell.saved_bytes(),
         "provider_input_tokens": cell.provider_input_tokens,
         "provider_output_tokens": cell.provider_output_tokens,
+        "control_input_tokens": cell.control_input_tokens,
+        "control_output_tokens": cell.control_output_tokens,
+        "guarded_input_tokens": cell.guarded_input_tokens,
+        "guarded_output_tokens": cell.guarded_output_tokens,
         "proxy_prefix_tokens_estimate": cell.proxy_prefix_tokens_estimate
     })
 }
@@ -574,6 +629,10 @@ fn help_text() -> String {
   brain compress savings [--since W] [--json] tokens saved, three honest classes\n\
   brain compress show <id> [--full] [--lines A:B]   inspect/recover an artifact\n\
   brain compress gc [--dry-run]         collect expired/over-quota unpinned artifacts\n\
+  brain compress json [FILE|-] [--table] [--fields a,b.c]   structured projection (raw persisted)\n\
+  brain explore QUESTION [--root P]     cheap-model repo navigation (discovery only)\n\
+  brain compress refs SYMBOL [PATH] [--kind def|ref|call] [--json]   symbol usage map\n\
+  brain recall QUERY [--limit N]        search past session transcripts (OPT-IN, off by default)\n\
   brain compress discover               commands that could compress but were too complex\n\
   brain compress doctor                 probe proxy + re-report capability facts"
         .to_string()

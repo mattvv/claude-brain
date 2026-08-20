@@ -285,6 +285,14 @@ pub struct RollupCell {
     pub compressed_events: u64,
     pub provider_input_tokens: u64,
     pub provider_output_tokens: u64,
+    // Per-arm provider token splits. The all-arm totals above stay authoritative
+    // for the observe-only accounting; these exist so the ground-truth class can
+    // compare `control` against `guarded` without mixing the arms into one
+    // number. Ground truth only: never populated from byte estimates.
+    pub control_input_tokens: u64,
+    pub control_output_tokens: u64,
+    pub guarded_input_tokens: u64,
+    pub guarded_output_tokens: u64,
     pub proxy_prefix_tokens_estimate: u64,
 }
 
@@ -312,6 +320,10 @@ impl RollupCell {
             "compressed_events": self.compressed_events,
             "provider_input_tokens": self.provider_input_tokens,
             "provider_output_tokens": self.provider_output_tokens,
+            "control_input_tokens": self.control_input_tokens,
+            "control_output_tokens": self.control_output_tokens,
+            "guarded_input_tokens": self.guarded_input_tokens,
+            "guarded_output_tokens": self.guarded_output_tokens,
             "proxy_prefix_tokens_estimate": self.proxy_prefix_tokens_estimate,
         })
     }
@@ -333,6 +345,10 @@ impl RollupCell {
             compressed_events: number(value, "compressed_events"),
             provider_input_tokens: number(value, "provider_input_tokens"),
             provider_output_tokens: number(value, "provider_output_tokens"),
+            control_input_tokens: number(value, "control_input_tokens"),
+            control_output_tokens: number(value, "control_output_tokens"),
+            guarded_input_tokens: number(value, "guarded_input_tokens"),
+            guarded_output_tokens: number(value, "guarded_output_tokens"),
             proxy_prefix_tokens_estimate: number(value, "proxy_prefix_tokens_estimate"),
         })
     }
@@ -361,6 +377,18 @@ impl RollupCell {
         self.provider_output_tokens = self
             .provider_output_tokens
             .saturating_add(other.provider_output_tokens);
+        self.control_input_tokens = self
+            .control_input_tokens
+            .saturating_add(other.control_input_tokens);
+        self.control_output_tokens = self
+            .control_output_tokens
+            .saturating_add(other.control_output_tokens);
+        self.guarded_input_tokens = self
+            .guarded_input_tokens
+            .saturating_add(other.guarded_input_tokens);
+        self.guarded_output_tokens = self
+            .guarded_output_tokens
+            .saturating_add(other.guarded_output_tokens);
         self.proxy_prefix_tokens_estimate = self
             .proxy_prefix_tokens_estimate
             .saturating_add(other.proxy_prefix_tokens_estimate);
@@ -416,25 +444,34 @@ impl Aggregate {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
 
+            let input_tokens = number(surface, "provider_input_tokens");
+            let output_tokens = number(surface, "provider_output_tokens");
+
             cell.events = cell.events.saturating_add(1);
             cell.calls = cell.calls.saturating_add(calls);
             cell.provider_calls = cell.provider_calls.saturating_add(provider_calls);
             cell.observed_bytes = cell.observed_bytes.saturating_add(observed);
             cell.delivered_bytes = cell.delivered_bytes.saturating_add(delivered);
-            cell.provider_input_tokens = cell
-                .provider_input_tokens
-                .saturating_add(number(surface, "provider_input_tokens"));
-            cell.provider_output_tokens = cell
-                .provider_output_tokens
-                .saturating_add(number(surface, "provider_output_tokens"));
+            cell.provider_input_tokens =
+                cell.provider_input_tokens.saturating_add(input_tokens);
+            cell.provider_output_tokens =
+                cell.provider_output_tokens.saturating_add(output_tokens);
             cell.proxy_prefix_tokens_estimate = cell
                 .proxy_prefix_tokens_estimate
                 .saturating_add(number(surface, "proxy_prefix_tokens_estimate"));
 
             if arm == "guarded" {
                 cell.guarded_calls = cell.guarded_calls.saturating_add(provider_calls);
+                cell.guarded_input_tokens =
+                    cell.guarded_input_tokens.saturating_add(input_tokens);
+                cell.guarded_output_tokens =
+                    cell.guarded_output_tokens.saturating_add(output_tokens);
             } else {
                 cell.control_calls = cell.control_calls.saturating_add(provider_calls);
+                cell.control_input_tokens =
+                    cell.control_input_tokens.saturating_add(input_tokens);
+                cell.control_output_tokens =
+                    cell.control_output_tokens.saturating_add(output_tokens);
             }
 
             if compressed {
@@ -895,6 +932,57 @@ mod tests {
         assert_eq!(cell.compressed_delivered_bytes, 40);
         assert_eq!(cell.recovered_bytes, 20);
         assert_eq!(cell.saved_bytes(), 40);
+
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn provider_tokens_split_per_arm() {
+        let state = temporary_state("arms");
+        let ledger = Ledger::new(&state, 4.0).unwrap();
+
+        let response_surface = |input, output| SurfaceDelta {
+            surface: SURFACE_CONSULT_RESPONSE.to_string(),
+            observed_bytes: 10,
+            delivered_bytes: 10,
+            recovered_bytes: 0,
+            compressed: false,
+            recovery: false,
+            calls: 1,
+            provider_calls: 1,
+            provider_input_tokens: input,
+            provider_output_tokens: output,
+            proxy_prefix_tokens_estimate: 0,
+        };
+
+        let mut control = LedgerEntry::new_consult("arm-model");
+        control.success = true;
+        control.surfaces.push(response_surface(500, 200));
+        ledger.append(&control).unwrap();
+
+        let mut guarded = LedgerEntry::new_consult("arm-model");
+        guarded.arm = "guarded".to_string();
+        guarded.success = true;
+        guarded.surfaces.push(response_surface(510, 80));
+        ledger.append(&guarded).unwrap();
+
+        let snapshot = ledger.snapshot(Window::Lifetime).unwrap();
+        let cell = snapshot
+            .cells
+            .iter()
+            .find(|cell| cell.model == "arm-model" && cell.surface == SURFACE_CONSULT_RESPONSE)
+            .unwrap();
+
+        // Per-arm splits are exact, and the all-arm totals remain their sum:
+        // the arms are separable without ever being merged into one class.
+        assert_eq!(cell.control_calls, 1);
+        assert_eq!(cell.guarded_calls, 1);
+        assert_eq!(cell.control_input_tokens, 500);
+        assert_eq!(cell.control_output_tokens, 200);
+        assert_eq!(cell.guarded_input_tokens, 510);
+        assert_eq!(cell.guarded_output_tokens, 80);
+        assert_eq!(cell.provider_input_tokens, 1010);
+        assert_eq!(cell.provider_output_tokens, 280);
 
         fs::remove_dir_all(state).unwrap();
     }

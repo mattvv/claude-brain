@@ -20,6 +20,10 @@ Rules:
   at `xhigh` with full context rather than retrying the same approach.
 - Cross-family verification beats same-family repetition: for high-stakes review, prefer
   a consultant from a different vendor than the one that wrote the code.
+- Measured token routing (compression-capabilities H12/H13): response profiles cut output
+  on every category with GPT-family consultants, but on grok, `--response
+  review|implementation` needs `--effort low` too (~80% fewer output tokens, no coverage
+  loss) — grok's default reasoning burn dominates those categories otherwise.
 - If a consultant reports its vendor isn't linked, tell the user the exact fix
   (`brain auth chatgpt|grok|kimi`) and continue with the next fallback.
 - If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,

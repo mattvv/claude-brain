@@ -1,0 +1,24 @@
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -30,7 +30,7 @@ class Settings:
+         return cls(defaults())
+
+     @classmethod
+-    def load_from(cls, path):
++    def from_path(cls, path):
+         with open(path) as fh:
+             raw = yaml.safe_load(fh)
+         return cls(raw)
+@@ -58,7 +58,7 @@ class Settings:
+     def reload(self):
+-        fresh = Settings.load_from(self.path)
++        fresh = Settings.from_path(self.path)
+         self.__dict__.update(fresh.__dict__)
+
+--- a/cli/main.py
++++ b/cli/main.py
+@@ -12,7 +12,7 @@ def main(argv):
+     args = parse(argv)
+-    settings = Settings.load_from(args.config)
++    settings = Settings.from_path(args.config)
+     return run(settings)

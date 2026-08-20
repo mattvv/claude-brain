@@ -127,21 +127,47 @@ async fn run_inner(command: Vec<String>) -> Result<i32, String> {
     };
     let handle = handle.expect("handle present after successful put");
 
-    let filter = filter_for(&command);
-    let compact = match filter {
-        Some(name) => rtk_pipe(name, &stdout).await,
-        None => None,
-    };
+    // Duplicate-result elision (design §5a): a byte-identical successful
+    // stdout already delivered in this scope becomes a one-line reference.
+    // Recovery goes through the NEW artifact, so gc of the older one can never
+    // strand it. Only successful, non-empty, NUL-free output is eligible —
+    // errors are never compressed, and the check runs before record so a
+    // result never matches itself.
+    let mut dedup_hit: Option<crate::dedup::PriorHit> = None;
+    if config.dedup_enabled
+        && output.status.success()
+        && !stdout.is_empty()
+        && !stdout.contains(&0u8)
+    {
+        let sha = crate::dedup::sha256_hex(&stdout);
+        let scope = crate::dedup::current_scope(&state);
+        dedup_hit = crate::dedup::check(&state, &sha, "shell", &scope, config.dedup_window_hours);
+        crate::dedup::record(&state, &sha, "shell", &handle, &scope);
+    }
 
-    // Only compress if RTK produced a strictly smaller stdout view.
-    let (view, compressed, delivered_len) = match compact {
-        Some(view) if view.len() < stdout.len() => {
-            let omitted = count_lines(&stdout).saturating_sub(count_lines(&view));
-            let rendered = render_view(&handle, &stdout, &view, omitted);
-            let len = rendered.len() as u64;
-            (rendered, true, len)
+    let (view, compressed, delivered_len) = if let Some(hit) = dedup_hit
+        .filter(|hit| reference_view(&handle, &hit.artifact_id, &stdout, hit.age_seconds).len() < stdout.len())
+    {
+        let rendered = reference_view(&handle, &hit.artifact_id, &stdout, hit.age_seconds);
+        let len = rendered.len() as u64;
+        (rendered, true, len)
+    } else {
+        let filter = filter_for(&command);
+        let compact = match filter {
+            Some(name) => rtk_pipe(name, &stdout).await,
+            None => None,
+        };
+
+        // Only compress if RTK produced a strictly smaller stdout view.
+        match compact {
+            Some(view) if view.len() < stdout.len() => {
+                let omitted = count_lines(&stdout).saturating_sub(count_lines(&view));
+                let rendered = render_view(&handle, &stdout, &view, omitted);
+                let len = rendered.len() as u64;
+                (rendered, true, len)
+            }
+            _ => (stdout.clone(), false, stdout.len() as u64),
         }
-        _ => (stdout.clone(), false, stdout.len() as u64),
     };
 
     // Emit: compact (or raw) stdout view, then verbatim stderr; preserve code.
@@ -207,6 +233,17 @@ fn combined_raw(stdout: &[u8], stderr: &[u8]) -> Vec<u8> {
     raw.extend_from_slice(b"\n--- stderr ---\n");
     raw.extend_from_slice(stderr);
     raw
+}
+
+/// One-line view for a duplicate result: cites the earlier artifact the model
+/// already saw, recovers through the new one.
+fn reference_view(new_handle: &str, prior_handle: &str, raw_stdout: &[u8], age_seconds: u64) -> Vec<u8> {
+    format!(
+        "[brain-compress id={new_handle} output identical to {prior_handle} seen {} ago ({} B) — recover: brain compress show {new_handle} --full]\n",
+        crate::dedup::human_age(age_seconds),
+        raw_stdout.len(),
+    )
+    .into_bytes()
 }
 
 fn render_view(handle: &str, raw_stdout: &[u8], compact: &[u8], omitted: usize) -> Vec<u8> {

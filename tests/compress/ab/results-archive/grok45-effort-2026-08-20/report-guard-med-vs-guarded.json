@@ -1,0 +1,86 @@
+{
+  "compare": [
+    "guarded",
+    "guard-med"
+  ],
+  "pairs": 11,
+  "dropped": 2,
+  "ignored_other_variants": 24,
+  "truncated_calls": {
+    "control": 0,
+    "guarded": 0
+  },
+  "claim_threshold": 30,
+  "claimable": false,
+  "overall": {
+    "pairs": 11,
+    "in_abs": {
+      "median": 0.0,
+      "ci95": [
+        0.0,
+        128.0
+      ]
+    },
+    "out_abs": {
+      "median": -255.0,
+      "ci95": [
+        -680.0,
+        90.0
+      ]
+    },
+    "in_pct": {
+      "median": 0.0
+    },
+    "out_pct": {
+      "median": -7.28012067947793
+    }
+  },
+  "categories": {
+    "implementation": {
+      "pairs": 5,
+      "in_abs": {
+        "median": 0.0,
+        "ci95": [
+          0.0,
+          384.0
+        ]
+      },
+      "out_abs": {
+        "median": -77.0,
+        "ci95": [
+          -713.0,
+          3358.0
+        ]
+      },
+      "in_pct": {
+        "median": 0.0
+      },
+      "out_pct": {
+        "median": -2.031126351886046
+      }
+    },
+    "review": {
+      "pairs": 6,
+      "in_abs": {
+        "median": 64.0,
+        "ci95": [
+          -64.0,
+          320.0
+        ]
+      },
+      "out_abs": {
+        "median": -337.5,
+        "ci95": [
+          -895.0,
+          334.5
+        ]
+      },
+      "in_pct": {
+        "median": 9.5952023988006
+      },
+      "out_pct": {
+        "median": -7.905701022241474
+      }
+    }
+  }
+}

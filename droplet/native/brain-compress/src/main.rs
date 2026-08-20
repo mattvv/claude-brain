@@ -15,11 +15,16 @@ mod artifact;
 mod ask;
 mod cli;
 mod config;
+mod dedup;
+mod explore;
 mod files;
 mod hook;
 mod http;
 mod ledger;
+mod recall;
 mod shell;
+mod structured;
+mod symbols;
 mod util;
 
 use std::env;
@@ -55,6 +60,12 @@ async fn main() {
     ) {
         args.remove(0);
         ask::run(args).await
+    } else if matches!(args.first().map(String::as_str), Some("explore")) {
+        args.remove(0);
+        explore::run(args).await
+    } else if matches!(args.first().map(String::as_str), Some("recall")) {
+        args.remove(0);
+        recall::run(args).await
     } else if matches!(args.first().map(String::as_str), Some("shell")) {
         args.remove(0);
         shell::run(args).await

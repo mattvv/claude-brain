@@ -22,6 +22,25 @@ pub struct Config {
     pub read_guard: String,
     pub large_file_lines: usize,
     pub large_file_bytes: u64,
+    /// Duplicate-result elision (design §5a): byte-identical successful
+    /// results within the scope window become references to the earlier view.
+    pub dedup_enabled: bool,
+    pub dedup_window_hours: u64,
+    /// Cheap-model repository navigation (design §2). An ordered fallback chain:
+    /// explore tries each in turn and falls to the next when a model's vendor is
+    /// not linked or the call fails. None may be a Claude-family model;
+    /// explore.rs enforces that too.
+    pub explore_models: Vec<String>,
+    pub explore_effort: String,
+    pub explore_max_pack_bytes: u64,
+    /// Cap on rows printed by `brain compress refs` (full result persisted).
+    pub symbols_max_results: u64,
+    /// Session-history recall (design §3). OPT-IN and OFF by default: it
+    /// searches past Claude Code transcripts, which may contain sensitive
+    /// text. The setup wizard offers to enable it.
+    pub recall_enabled: bool,
+    pub recall_max_files: u64,
+    pub recall_half_life_days: u64,
     pub path: PathBuf,
 }
 
@@ -38,6 +57,15 @@ impl Config {
             read_guard: "observe".to_string(),
             large_file_lines: 800,
             large_file_bytes: 48 * 1024,
+            dedup_enabled: true,
+            dedup_window_hours: 8,
+            explore_models: vec!["gpt-5.6-luna".to_string(), "grok-4.5".to_string()],
+            explore_effort: "low".to_string(),
+            explore_max_pack_bytes: 96 * 1024,
+            symbols_max_results: 200,
+            recall_enabled: false,
+            recall_max_files: 40,
+            recall_half_life_days: 14,
             path: state.join("compress/compress.toml"),
         }
     }
@@ -151,6 +179,87 @@ impl Config {
                     config.large_file_lines = value.parse::<usize>().map_err(|error| {
                         format!(
                             "{}:{}: invalid file_tools.large_file_lines: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                // Ordered fallback chain, comma-separated. `explore.model` is
+                // kept as an alias so a single value still works.
+                "explore.models" | "explore.model" => {
+                    let chain: Vec<String> = unquote(value)
+                        .split(',')
+                        .map(|m| m.trim().to_string())
+                        .filter(|m| !m.is_empty())
+                        .collect();
+                    if chain.is_empty() {
+                        return Err(format!(
+                            "{}:{}: explore.models needs at least one model",
+                            config.path.display(),
+                            line_number + 1
+                        ));
+                    }
+                    config.explore_models = chain;
+                }
+                "explore.effort" => config.explore_effort = unquote(value),
+                "explore.max_pack_bytes" => {
+                    config.explore_max_pack_bytes = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid explore.max_pack_bytes: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.enabled" => {
+                    config.recall_enabled = parse_bool(value).ok_or_else(|| {
+                        format!(
+                            "{}:{}: invalid boolean for recall.enabled",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.max_files" => {
+                    config.recall_max_files = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid recall.max_files: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.half_life_days" => {
+                    config.recall_half_life_days = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid recall.half_life_days: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "symbols.max_results" => {
+                    config.symbols_max_results = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid symbols.max_results: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "dedup.enabled" => {
+                    config.dedup_enabled = parse_bool(value).ok_or_else(|| {
+                        format!(
+                            "{}:{}: invalid boolean for dedup.enabled",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "dedup.window_hours" => {
+                    config.dedup_window_hours = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid dedup.window_hours: {error}",
                             config.path.display(),
                             line_number + 1
                         )

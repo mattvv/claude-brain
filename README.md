@@ -122,6 +122,8 @@ private network — no ports ever open to the internet:
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
 | `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
+| `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
+| `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
 | `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
 
 All run on the droplet, after `ssh claude-brain`.
@@ -147,12 +149,37 @@ What it does:
   `brain compress show <id> --full`.
 - **Leaner file reads.** `brain compress read <file> --outline` (just the signatures),
   `--query '<goal>'` (matching regions), or `--lines A:B` instead of pulling a huge file whole.
+  `brain compress refs <symbol>` finds definitions, references, and callers via a real
+  tree-sitter parser instead of reading everything.
+- **Navigate instead of read.** `brain explore "how does X flow through the system"` sends a
+  small, locally-gathered pack to a *cheap* model and returns one dense, cited answer — so the
+  expensive brain never reads a pile of files just to orient itself. The cheap model is a
+  configurable fallback chain (`[explore] models`, default `gpt-5.6-luna,grok-4.5`).
 - **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
-  *paths* (`brain-ask --context-file`) so the file bytes never fill its own context twice, and
-  can request a terser answer (`--response review|debug|concise`).
+  *paths* (`brain-ask --context-file`) so the file bytes never fill the brain's *own* context
+  twice, and it can ask the consultant for a terser answer (`--response debug|concise|…`) at the
+  right effort for the vendor.
+- **Recall past work (opt-in).** `brain recall "<what you're looking for>"` searches your past
+  Claude Code sessions for the one command/decision/fix you need, instead of re-deriving it.
+  Off by default; `brain setup` offers to enable it (it reads your transcripts, so it asks first).
 - **Honest measurement.** `brain compress savings` reports three separate numbers —
   provider-reported ground truth, exact bytes saved, and a labelled token estimate — and never
   blends them into one inflated figure. `brain compress off` disables everything instantly.
+
+**Typical savings** (measured on this project, not advertised):
+
+- **Command & file output — the big, reliable win.** Verbose output shrinks **~60–95%** before
+  it reaches the model: a 20-line `git log` went 10,881 → ~320 bytes (~97%), a recursive `grep`
+  16,573 → 4,783 bytes (~71%). Every byte stays recoverable.
+- **Consultation answers — depends on model + effort.** Asking a consultant for a task-matched
+  terse answer cut its *generated* output by **20–40%** on debugging/config/architecture
+  questions (Grok-4.5, 30-call-per-arm A/B). On other question types the lever is the model and
+  its effort setting, not the wording: the same profile that did nothing on Grok cut GPT/Luna
+  output ~**34%** overall, and dropping Grok to low effort cut review output **~80%** while still
+  catching every seeded bug. So the brain tunes profile + effort per vendor. Handing over file
+  *paths* saves the brain from re-holding those files in its own context — a separate, brain-side
+  saving. `brain compress savings` splits all of this into honest classes; the full A/B is in the
+  docs below.
 
 The guarantee: **nothing is ever silently dropped.** Every compacted view carries a recovery
 handle, and errors, diffs, and anything about to be edited are never compressed. Under the
