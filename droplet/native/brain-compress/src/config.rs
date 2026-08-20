@@ -26,6 +26,11 @@ pub struct Config {
     /// results within the scope window become references to the earlier view.
     pub dedup_enabled: bool,
     pub dedup_window_hours: u64,
+    /// Cheap-model repository navigation (design §2). The model must never be
+    /// a Claude-family model; explore.rs enforces that too.
+    pub explore_model: String,
+    pub explore_effort: String,
+    pub explore_max_pack_bytes: u64,
     pub path: PathBuf,
 }
 
@@ -44,6 +49,9 @@ impl Config {
             large_file_bytes: 48 * 1024,
             dedup_enabled: true,
             dedup_window_hours: 8,
+            explore_model: "gpt-5.6-luna".to_string(),
+            explore_effort: "low".to_string(),
+            explore_max_pack_bytes: 96 * 1024,
             path: state.join("compress/compress.toml"),
         }
     }
@@ -157,6 +165,17 @@ impl Config {
                     config.large_file_lines = value.parse::<usize>().map_err(|error| {
                         format!(
                             "{}:{}: invalid file_tools.large_file_lines: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "explore.model" => config.explore_model = unquote(value),
+                "explore.effort" => config.explore_effort = unquote(value),
+                "explore.max_pack_bytes" => {
+                    config.explore_max_pack_bytes = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid explore.max_pack_bytes: {error}",
                             config.path.display(),
                             line_number + 1
                         )

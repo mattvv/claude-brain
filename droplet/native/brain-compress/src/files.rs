@@ -198,7 +198,7 @@ fn range_view(all: &[&str], a: usize, b: usize) -> String {
     v
 }
 
-fn query_view(all: &[&str], query: &str, context: usize) -> (String, bool) {
+pub(crate) fn query_view(all: &[&str], query: &str, context: usize) -> (String, bool) {
     let needle = query.to_lowercase();
     let mut keep = vec![false; all.len()];
     let mut any = false;
@@ -232,7 +232,7 @@ fn query_view(all: &[&str], query: &str, context: usize) -> (String, bool) {
 }
 
 /// Lexical (regex-free) signature scan. NOT a parse — used only for discovery.
-fn outline_view(all: &[&str]) -> String {
+pub(crate) fn outline_view(all: &[&str]) -> String {
     const KEYWORDS: &[&str] = &[
         "fn ", "pub fn", "struct ", "enum ", "trait ", "impl ", "mod ", "const ", "static ",
         "type ", "class ", "def ", "function ", "interface ", "func ", "public ", "private ",

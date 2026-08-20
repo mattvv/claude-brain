@@ -16,6 +16,7 @@ mod ask;
 mod cli;
 mod config;
 mod dedup;
+mod explore;
 mod files;
 mod hook;
 mod http;
@@ -57,6 +58,9 @@ async fn main() {
     ) {
         args.remove(0);
         ask::run(args).await
+    } else if matches!(args.first().map(String::as_str), Some("explore")) {
+        args.remove(0);
+        explore::run(args).await
     } else if matches!(args.first().map(String::as_str), Some("shell")) {
         args.remove(0);
         shell::run(args).await

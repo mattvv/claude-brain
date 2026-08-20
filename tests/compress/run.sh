@@ -251,6 +251,22 @@ check "malformed json passes through unchanged" 'grep -q "not json" "$WORK/j3.ou
 printf '{"a":1}\n' | "$BIN" json - > "$WORK/j4.out" 2>"$WORK/j4.err"
 check "no-gain input passes through honestly"   'grep -q "no byte gain" "$WORK/j4.err" && [ "$(cat "$WORK/j4.out")" = "{\"a\":1}" ]'
 
+
+echo "== explore (offline, fake model) =="
+EXROOT="$WORK/exrepo"
+mkdir -p "$EXROOT/src"
+printf 'pub fn frobnicate(x: u32) -> u32 { x + 1 }\n' > "$EXROOT/src/frob.rs"
+printf 'use crate::frob;\nfn main() { frob::frobnicate(1); }\n' > "$EXROOT/src/main.rs"
+"$BIN" explore "where is frobnicate defined" --root "$EXROOT" --model ok-nonstream > "$WORK/ex.out" 2>"$WORK/ex.err" && RC=0 || RC=$?
+check "explore completes against fake proxy"  '[ "'"$RC"'" = "0" ] || [ "$RC" = "0" ]'
+check "explore header names model + pack id"  'grep -q "brain-explore model=ok-nonstream" "$WORK/ex.out"'
+check "explore is marked discovery-only"      'grep -q "discovery only" "$WORK/ex.out"'
+check "explore answer text present"           'grep -q "Hello world" "$WORK/ex.out"'
+EXID="$(grep -oE "id=bc_[A-Z0-9]+" "$WORK/ex.out" | head -1 | sed s/id=//)"
+check "explore pack persisted + recoverable"  '"$BIN" compress show "'"$EXID"'" --full 2>/dev/null | grep -q BRAIN_EXPLORE_PACK || "$BIN" compress show "$EXID" --full | grep -q BRAIN_EXPLORE_PACK'
+check "explore pack contains the source file" '"$BIN" compress show "$EXID" --full | grep -q "frob.rs"'
+check "explore refuses Claude models"         '! "$BIN" explore "x frobnicate" --root "$EXROOT" --model claude-fable >/dev/null 2>&1'
+
 echo "== statusline savings segment =="
 SL="$HERE/../../droplet/claude/statusline.sh"
 SLIN='{"model":{"display_name":"T"},"cwd":"/tmp/x"}'
