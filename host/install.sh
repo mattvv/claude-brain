@@ -1,15 +1,37 @@
 #!/usr/bin/env bash
-# Idempotent on-droplet installer: links the brain CLI into ~/.local/bin and
-# leaves a hint for first login. Run as the target (non-root) user.
+# Idempotent on-host installer: links the brain CLI into ~/.local/bin, wires up
+# the Claude Code integration, and records what it touched so `brain uninstall`
+# can undo it. Run as the target (non-root) user.
+#
+# On a droplet this owns the machine's Claude config. On someone's own computer
+# it is a guest: it backs up settings.json before the first change and refuses
+# to steal a statusline they already had.
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _d="$(cd -P "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$_d/$SELF" ;; esac
+done
+REPO_DIR="$(cd -P "$(dirname "$SELF")/.." && pwd)"
+# shellcheck source=lib/platform.sh
+. "$REPO_DIR/host/lib/platform.sh"
 
-mkdir -p "$HOME/.local/bin" "$HOME/.local/state/brain"
+SETTINGS_FILE="$HOME/.config/brain/settings"
+PROFILE="$(sed -n 's/^PROFILE=//p' "$SETTINGS_FILE" 2>/dev/null | tail -1)"
+[ -n "$PROFILE" ] || PROFILE="$(default_profile)"
+
+STATE_DIR="$HOME/.local/state/brain"
+MANIFEST="$STATE_DIR/install-manifest"
+
+mkdir -p "$HOME/.local/bin" "$STATE_DIR"
+: > "$MANIFEST"
+note() { printf '%s\n' "$*" >> "$MANIFEST"; }
 for tool in brain brain-ask brain-compress brain-proxy-build; do
   chmod 755 "$REPO_DIR/host/bin/$tool"
   ln -sf "$REPO_DIR/host/bin/$tool" "$HOME/.local/bin/$tool"
+  note "link $HOME/.local/bin/$tool"
 done
 chmod 755 "$REPO_DIR/host/libexec/legacy/brain-ask"
 
@@ -55,6 +77,25 @@ if command -v jq >/dev/null 2>&1; then
   SETTINGS="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+
+  # One backup, kept forever, taken before we first touch a config that may
+  # predate us. Re-running the installer must not bury the original.
+  if [ ! -f "$STATE_DIR/settings.json.pre-brain" ]; then
+    cp "$SETTINGS" "$STATE_DIR/settings.json.pre-brain"
+    cp "$SETTINGS" "$SETTINGS.pre-brain-$(date +%Y%m%d%H%M%S)"
+    note "backup $STATE_DIR/settings.json.pre-brain"
+  fi
+
+  # The statusline is the one setting that can only have one owner. Claim it
+  # when it is free or already ours; otherwise leave the user's alone and say
+  # how to switch. (`brain config statusline on` forces it.)
+  STATUSLINE_MODE=claim
+  existing_statusline="$(jq -r '.statusLine.command // empty' "$SETTINGS")"
+  case "$existing_statusline" in
+    ''|*claude-brain*|*"$REPO_DIR"*|*/host/claude/statusline.sh|*/droplet/claude/statusline.sh) ;;
+    *) [ "$PROFILE" = droplet ] || STATUSLINE_MODE=keep ;;
+  esac
+
   MANAGED='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read'
   jq --arg hooks "$HOOKS_DIR" \
      --arg statusline "$REPO_DIR/host/claude/statusline.sh" \
@@ -71,17 +112,33 @@ if command -v jq >/dev/null 2>&1; then
     | .hooks.PostToolUse = (strip(.hooks.PostToolUse) + [
       {matcher: "*", hooks: [{type: "command", command: ($hooks + "/consult-progress.sh")}]}
     ])
-    | .statusLine = {type: "command", command: $statusline, refreshInterval: 2}
-  ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    | (if $mode == "claim"
+       then .statusLine = {type: "command", command: $statusline, refreshInterval: 2}
+       else . end)
+  ' --arg mode "$STATUSLINE_MODE" "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  note "settings $SETTINGS"
+  if [ "$STATUSLINE_MODE" = keep ]; then
+    printf 'kept your existing statusline (%s).\n' "$existing_statusline"
+    printf 'to use the claude-brain one instead: brain config statusline on\n'
+  fi
 fi
 
-# Ensure ~/.local/bin is on PATH for interactive shells.
-if ! grep -Fq '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
-  printf '\n# Added by claude-brain\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
-fi
+# Ensure ~/.local/bin is on PATH for interactive shells. macOS logs you in with
+# zsh, so write to whichever rc file this user actually has.
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  case "$rc" in
+    *.zshrc) [ "$(brain_os)" = macos ] || [ -f "$rc" ] || continue ;;
+    *.bashrc) [ "$(brain_os)" = macos ] && [ ! -f "$rc" ] && continue ;;
+  esac
+  if ! grep -Fq '.local/bin' "$rc" 2>/dev/null; then
+    printf '\n# Added by claude-brain\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+    note "path $rc"
+  fi
+done
 
-# First-login hint (best effort; needs sudo, absent in some contexts).
-if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+# First-login hint. A droplet greets you over SSH; nobody wants their own Mac
+# rewriting /etc, so this is droplet-only.
+if [ "$PROFILE" = droplet ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   sudo tee /etc/update-motd.d/99-brain >/dev/null <<'MOTD'
 #!/bin/sh
 echo ""
@@ -89,6 +146,7 @@ echo "  claude-brain: run 'brain setup' to finish setting up, or 'brain' to star
 echo ""
 MOTD
   sudo chmod 755 /etc/update-motd.d/99-brain
+  note "motd /etc/update-motd.d/99-brain"
 fi
 
 echo "claude-brain installed. Run: brain setup"
