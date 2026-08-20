@@ -296,6 +296,30 @@ The doc scripts the agent explicitly:
 
 ## 6. Status
 
-- `README.md` — rewritten on this branch (new pitch + agent-driven install + host matrix).
-  It describes the **target** state, so this branch must not merge before phases 1–8 land.
-- Everything else in this document is unstarted.
+All nine phases are implemented on `brain-anywhere`, and `main` (compression
+0.3.0, brain-symbols, explore/recall) is merged in.
+
+| Phase | State |
+|---|---|
+| 0 — spike | **pending: needs the Mac.** The pinned+patched CLIProxyAPI has not been built on darwin/arm64 yet, and there is no prebuilt fallback. |
+| 1 — rename + repo-root derivation | done, and the compat path is regression-tested |
+| 2 — platform.sh | done (39 unit tests) |
+| 3 — bootstrap.sh + slimmed cloud-init | done |
+| 4 — services, autostart, keepawake | done; systemd verified for real, launchd verified with a stubbed launchctl |
+| 5 — profiles, scope, guest behaviour, uninstall | done (37 installer tests) |
+| 6 — one installer, three targets | done; local install verified end to end in a sandbox HOME |
+| 7 — agent-driven install | done |
+| 8 — docs | done |
+| 9 — tests + CI | done: 39 platform + 37 installer + the existing 114 compression checks, CI on Linux, macOS (under /bin/bash 3.2) and an Arch container |
+
+**What is still unverified, and only real hardware can settle it:**
+
+1. **macOS end to end** — the Go build of the pinned router on darwin/arm64,
+   `launchctl bootstrap` of the two agents against real launchd, `pmset -c`, and
+   a phone session attaching. CI covers the scripts under bash 3.2 and the plist
+   rendering, not the runtime.
+2. **Arch end to end** — package names and the systemd path are exercised in a
+   container by CI; a real box is still worth one pass.
+3. **The live droplet** — `brain update` across the rename works in a clone-based
+   test, including from a machine with no settings file. Running it on the actual
+   droplet is the last step before merging.
