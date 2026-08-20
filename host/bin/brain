@@ -25,9 +25,9 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 AGENTS_DIR="$HOME/.claude/agents"
-AGENTS_RC_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-rc"
-AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/droplet/claude/agents-multi"
-UNIT_SRC="$BRAIN_REPO_DIR/droplet/systemd/cli-proxy-api.service"
+AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
+AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
+UNIT_SRC="$BRAIN_REPO_DIR/host/systemd/cli-proxy-api.service"
 UNIT_DST="$HOME/.config/systemd/user/cli-proxy-api.service"
 
 # Names covered by both lanes; installing one lane removes the other's copies.
@@ -59,7 +59,7 @@ install_block() {
 
 install_routing() {
   install_block "$1" routing
-  install_block "$BRAIN_REPO_DIR/droplet/claude/brain-ops.md" ops
+  install_block "$BRAIN_REPO_DIR/host/claude/brain-ops.md" ops
   install_consult_block
 }
 
@@ -69,7 +69,7 @@ install_routing() {
 install_consult_block() {
   local mode
   mode="$(setting_get CONSULT_VISIBILITY background)"
-  install_block "$BRAIN_REPO_DIR/droplet/claude/consult-$mode.md" consult
+  install_block "$BRAIN_REPO_DIR/host/claude/consult-$mode.md" consult
 }
 
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
@@ -110,7 +110,7 @@ rc_server() {
   need tmux jq
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   install_agents "$AGENTS_RC_SRC"
-  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-rc.md"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
   seed_trust "$dir"
   if ! tmux has-session -t "$tmux_name" 2>/dev/null; then
     info "starting Remote Control server for $dir (tmux: $tmux_name)"
@@ -196,7 +196,7 @@ cmd_multi() {
   proxy_ready || die "proxy is not healthy — check: brain status"
   check_for_updates
   install_agents "$AGENTS_MULTI_SRC"
-  install_routing "$BRAIN_REPO_DIR/droplet/claude/routing-multi.md"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-multi.md"
   local token
   token="$(brain_token)"
   info "starting multi-model session (tmux: brain-multi) — no phone control in this mode"
@@ -462,7 +462,7 @@ cmd_auth() {
 render_proxy_config() {
   umask 077
   sed -e "s|__TOKEN__|$(brain_token)|" -e "s|__AUTH_DIR__|$BRAIN_AUTH_DIR|" \
-    "$BRAIN_REPO_DIR/droplet/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
+    "$BRAIN_REPO_DIR/host/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
   chmod 600 "$BRAIN_PROXY_CONFIG"
 }
 
@@ -683,7 +683,7 @@ cmd_config() {
 cmd_update() {
   info "updating claude-brain"
   git -C "$BRAIN_REPO_DIR" pull --ff-only
-  "$BRAIN_REPO_DIR/droplet/install.sh"
+  "$BRAIN_REPO_DIR/host/install.sh"
   "$SCRIPT_DIR/brain-proxy-build"   # no-op unless PIN changed
   if claude_bin >/dev/null; then "$(claude_bin)" update || true; fi
   if [ -f "$BRAIN_PROXY_CONFIG" ]; then

@@ -51,19 +51,19 @@ Inventory from reading the tree — every one of these is a blocker for a local 
 | `setup.sh` (whole file) | doctl, droplet create, SSH key import, `ssh brain@IP` handoff |
 | `cloud-init.yaml` | DO-only bootstrap: mirrors `/root/.ssh/authorized_keys`, `ufw`, `loginctl enable-linger`, Go **linux-amd64** tarball, gh apt repo, apt packages |
 | `droplet/` (tree name) | the entire product lives under a cloud-vendor noun |
-| `droplet/lib/common.sh:8` | `BRAIN_REPO_DIR` defaults to `$HOME/claude-brain` — a hardcoded clone location |
-| `droplet/lib/common.sh:3` | "Targets Ubuntu (bash + GNU coreutils) only" |
-| `droplet/lib/common.sh:111,134`, `droplet/claude/statusline.sh:18,22` | `stat -Lc` — GNU only, fails on macOS |
-| `droplet/bin/brain:30-31,469-474,525,691-692` | systemd user unit is the only service model |
-| `droplet/bin/brain:217` | `brain status` shells out to `systemctl --user` |
-| `droplet/bin/brain:230-234` | loopback check uses `ss` (absent on macOS) |
-| `droplet/bin/brain:449` | `ufw allow in on tailscale0` |
-| `droplet/bin/brain:488` | `PATH=$PATH:/usr/local/go/bin` — the cloud-init tarball location |
-| `droplet/bin/brain:82` | `timeout 8 git fetch` — no `timeout(1)` on macOS |
-| `droplet/bin/brain:404-410,429-432,564` | help text hardcodes `ssh claude-brain` |
-| `droplet/install.sh:85-92` | writes `/etc/update-motd.d/99-brain` |
-| `droplet/install.sh:74` | **overwrites `~/.claude/settings.json.statusLine` unconditionally** — fine on a dedicated droplet user, hostile on a personal machine |
-| `droplet/claude/brain-ops.md` | tells every session it has passwordless sudo, apt, and may install anything |
+| `host/lib/common.sh:8` | `BRAIN_REPO_DIR` defaults to `$HOME/claude-brain` — a hardcoded clone location |
+| `host/lib/common.sh:3` | "Targets Ubuntu (bash + GNU coreutils) only" |
+| `host/lib/common.sh:111,134`, `host/claude/statusline.sh:18,22` | `stat -Lc` — GNU only, fails on macOS |
+| `host/bin/brain:30-31,469-474,525,691-692` | systemd user unit is the only service model |
+| `host/bin/brain:217` | `brain status` shells out to `systemctl --user` |
+| `host/bin/brain:230-234` | loopback check uses `ss` (absent on macOS) |
+| `host/bin/brain:449` | `ufw allow in on tailscale0` |
+| `host/bin/brain:488` | `PATH=$PATH:/usr/local/go/bin` — the cloud-init tarball location |
+| `host/bin/brain:82` | `timeout 8 git fetch` — no `timeout(1)` on macOS |
+| `host/bin/brain:404-410,429-432,564` | help text hardcodes `ssh claude-brain` |
+| `host/install.sh:85-92` | writes `/etc/update-motd.d/99-brain` |
+| `host/install.sh:74` | **overwrites `~/.claude/settings.json.statusLine` unconditionally** — fine on a dedicated droplet user, hostile on a personal machine |
+| `host/claude/brain-ops.md` | tells every session it has passwordless sudo, apt, and may install anything |
 | `.github/workflows/ci.yml` | ubuntu-only lint; no macOS/Arch coverage |
 
 **Good news from the same read:**
@@ -277,7 +277,7 @@ The doc scripts the agent explicitly:
 ## 5. Risks
 
 1. **`brain update` breaks across the rename.** The *old* `brain` script runs
-   `$REPO/droplet/install.sh` **after** `git pull`. Mitigation: ship the `droplet -> host`
+   `$REPO/host/install.sh` **after** `git pull`. Mitigation: ship the `droplet -> host`
    symlink in the same commit as the rename, keep it for at least one release, and add a
    fallback in `cmd_update`. Verified against the live droplet before merge.
 2. **Router build on darwin/arm64 unproven.** Phase 0 spike gates everything; there is no

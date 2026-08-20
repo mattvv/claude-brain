@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # variables are consumed by the sourcing scripts
-# Shared helpers for claude-brain droplet scripts. Source, don't execute.
-# Targets Ubuntu (bash + GNU coreutils) only.
+# Shared helpers for claude-brain host scripts. Source, don't execute.
+# Portable across macOS (bash 3.2 + BSD tools) and Linux (bash 4+ + GNU tools):
+# keep this file free of bash-4 syntax, and route anything platform-specific
+# through host/lib/platform.sh.
 
 set -o pipefail
 
-BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$HOME/claude-brain}"
+# Resolve this file's real directory without `readlink -f` (BSD readlink lacked
+# it before macOS 12.3), then derive the repo root from it. This is what lets
+# the repo live anywhere: ~/claude-brain on a droplet, ~/src/... on a Mac.
+_brain_self="${BASH_SOURCE[0]}"
+while [ -L "$_brain_self" ]; do
+  _brain_dir="$(cd -P "$(dirname "$_brain_self")" && pwd)"
+  _brain_self="$(readlink "$_brain_self")"
+  case "$_brain_self" in /*) ;; *) _brain_self="$_brain_dir/$_brain_self" ;; esac
+done
+BRAIN_LIB_DIR="$(cd -P "$(dirname "$_brain_self")" && pwd)"
+unset _brain_self _brain_dir
+BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$(cd -P "$BRAIN_LIB_DIR/../.." && pwd)}"
 BRAIN_CONFIG_DIR="${BRAIN_CONFIG_DIR:-$HOME/.config/brain}"
 BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 BRAIN_STATE_DIR="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
@@ -19,8 +32,8 @@ BRAIN_PROXY_BIN="$BRAIN_DATA_DIR/proxy/bin/cli-proxy-api"
 BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-8317}"
 BRAIN_PROXY_URL="http://127.0.0.1:$BRAIN_PROXY_PORT"
 
-BRAIN_PIN_FILE="$BRAIN_REPO_DIR/droplet/proxy/PIN"
-BRAIN_PATCH_FILE="$BRAIN_REPO_DIR/droplet/proxy/patches/cliproxyapi-claude-effort.patch"
+BRAIN_PIN_FILE="$BRAIN_REPO_DIR/host/proxy/PIN"
+BRAIN_PATCH_FILE="$BRAIN_REPO_DIR/host/proxy/patches/cliproxyapi-claude-effort.patch"
 PROXY_REPO_URL="https://github.com/router-for-me/CLIProxyAPI.git"
 
 # Colors only when stdout is a terminal.

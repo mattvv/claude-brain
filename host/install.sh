@@ -8,16 +8,16 @@ REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/state/brain"
 for tool in brain brain-ask brain-compress brain-proxy-build; do
-  chmod 755 "$REPO_DIR/droplet/bin/$tool"
-  ln -sf "$REPO_DIR/droplet/bin/$tool" "$HOME/.local/bin/$tool"
+  chmod 755 "$REPO_DIR/host/bin/$tool"
+  ln -sf "$REPO_DIR/host/bin/$tool" "$HOME/.local/bin/$tool"
 done
-chmod 755 "$REPO_DIR/droplet/libexec/legacy/brain-ask"
+chmod 755 "$REPO_DIR/host/libexec/legacy/brain-ask"
 
 # Build and install the native brain-compress binary (async consultation +
 # observe-only token accounting). Best effort: if the Rust toolchain is missing
 # or the build fails, brain-ask transparently falls back to the bundled Bash
 # implementation and compression is simply unavailable. Never fatal to install.
-CRATE_DIR="$REPO_DIR/droplet/native/brain-compress"
+CRATE_DIR="$REPO_DIR/host/native/brain-compress"
 NATIVE_BASE="$HOME/.local/share/brain/native"
 if command -v cargo >/dev/null 2>&1 && [ -f "$CRATE_DIR/Cargo.toml" ]; then
   version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$CRATE_DIR/Cargo.toml" | head -1)"
@@ -42,22 +42,22 @@ fi
 # Seed the compression config (observe-only) if the user has none yet.
 COMPRESS_DIR="$HOME/.local/state/brain/compress"
 mkdir -p "$COMPRESS_DIR"
-if [ ! -f "$COMPRESS_DIR/compress.toml" ] && [ -f "$REPO_DIR/droplet/templates/compress.toml.tmpl" ]; then
-  cp "$REPO_DIR/droplet/templates/compress.toml.tmpl" "$COMPRESS_DIR/compress.toml"
+if [ ! -f "$COMPRESS_DIR/compress.toml" ] && [ -f "$REPO_DIR/host/templates/compress.toml.tmpl" ]; then
+  cp "$REPO_DIR/host/templates/compress.toml.tmpl" "$COMPRESS_DIR/compress.toml"
 fi
 
 # Register the Claude Code integration: model guard, consultation progress
 # hooks, and the statusline. All three are keyed by script name so re-running
 # install.sh replaces them rather than accumulating duplicates.
-HOOKS_DIR="$REPO_DIR/droplet/claude/hooks"
-chmod 755 "$HOOKS_DIR"/*.sh "$REPO_DIR/droplet/claude/statusline.sh"
+HOOKS_DIR="$REPO_DIR/host/claude/hooks"
+chmod 755 "$HOOKS_DIR"/*.sh "$REPO_DIR/host/claude/statusline.sh"
 if command -v jq >/dev/null 2>&1; then
   SETTINGS="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   MANAGED='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read'
   jq --arg hooks "$HOOKS_DIR" \
-     --arg statusline "$REPO_DIR/droplet/claude/statusline.sh" \
+     --arg statusline "$REPO_DIR/host/claude/statusline.sh" \
      --arg managed "$MANAGED" '
     def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
     .hooks.PreToolUse = (strip(.hooks.PreToolUse) + [

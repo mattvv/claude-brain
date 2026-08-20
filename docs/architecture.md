@@ -34,7 +34,7 @@ phone/app ◄── Remote Control ──► claude (native Anthropic auth, tmux
   `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` explicitly scrubbed from
   the environment, so Remote Control always works.
 - The brain is always Claude. Other models are **consultants**: bridge agents
-  (`droplet/claude/agents-rc/`) read the needed files, compose one self-contained prompt,
+  (`host/claude/agents-rc/`) read the needed files, compose one self-contained prompt,
   and call the local router with the `brain-ask` CLI (`POST /v1/messages`, Anthropic wire
   format, bearer token from `~/.config/brain/token`).
 - The router is stateless per call; multi-turn = re-send context.
@@ -65,7 +65,7 @@ installs its agent set and removes the other's. Don't run both lanes at once.
 A pinned, patched build of
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (Go):
 
-- Pin + patch checksum live in `droplet/proxy/PIN`; `brain-proxy-build` verifies both
+- Pin + patch checksum live in `host/proxy/PIN`; `brain-proxy-build` verifies both
   before building. The vendored patch propagates `output_config.effort` →
   `reasoning.effort` for Claude→GPT translation.
 - Listens on `127.0.0.1:8317` **only**. Config: `~/.config/brain/proxy-config.yaml`,
@@ -73,29 +73,29 @@ A pinned, patched build of
 - Vendor logins are OAuth *subscription* logins performed by the proxy binary itself
   (`--codex-device-login`, `--xai-login --no-browser`, ...). Credentials land in
   `~/.cli-proxy-api/` (0700, records 0600) and auto-refresh.
-- Runs as a systemd **user** service (`droplet/systemd/cli-proxy-api.service`) with
+- Runs as a systemd **user** service (`host/systemd/cli-proxy-api.service`) with
   `Restart=always`; `loginctl enable-linger` keeps it alive without a login session.
 
 ## Routing intelligence
 
 The proxy itself is dumb fan-out; task→model routing lives a layer up (parable's design):
 
-- **Routing tables** (`droplet/claude/routing-rc.md`, `routing-multi.md`) — per-task-class
+- **Routing tables** (`host/claude/routing-rc.md`, `routing-multi.md`) — per-task-class
   preference orderings with fallbacks and effort guidance, adapted from parable's
   `[routing]` config. Launching a lane installs its table into the droplet's
   `~/.claude/CLAUDE.md` as a managed block, so the brain reads it every session.
 - **Effort tiers** — easy classes route to cheap lanes at `low`/`medium` effort; hard
   classes climb to sol/fable at `xhigh`. Multi-lane efforts are pinned in agent
   frontmatter; the RC lane passes `--effort` per call through `brain-ask`.
-- **Model guard** (`droplet/claude/hooks/model-guard.sh`) — a PreToolUse hook, modeled on
+- **Model guard** (`host/claude/hooks/model-guard.sh`) — a PreToolUse hook, modeled on
   parable's `model_guard.py`, that blocks delegation to a `brain-*` agent whose vendor
   isn't linked and tells the model the exact fix (`brain auth <vendor>`) plus "use the
   next fallback", instead of a raw HTTP error mid-task. Registered idempotently in
-  `~/.claude/settings.json` by `droplet/install.sh`.
+  `~/.claude/settings.json` by `host/install.sh`.
 
 ## Self-service operations
 
-The brain administers its own machine. `droplet/claude/brain-ops.md` is installed into
+The brain administers its own machine. `host/claude/brain-ops.md` is installed into
 `~/.claude/CLAUDE.md` (managed `ops` block, alongside the lane's `routing` block) and
 tells every session it may install packages/MCP servers, update itself, and link vendor
 accounts using the headless auth flow:

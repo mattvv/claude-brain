@@ -7,7 +7,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CRATE="$HERE/../../droplet/native/brain-compress"
+CRATE="$HERE/../../host/native/brain-compress"
 PORT="${BRAIN_TEST_PORT:-8399}"
 PASS=0
 FAIL=0

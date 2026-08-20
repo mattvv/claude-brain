@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # claude-brain statusline: model · dir, plus live consultation activity when a
-# brain-ask --stream log is actively being written (see droplet/bin/brain-ask).
+# brain-ask --stream log is actively being written (see host/bin/brain-ask).
 set -uo pipefail
 
 input="$(cat)"
