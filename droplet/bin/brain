@@ -557,6 +557,26 @@ cmd_setup() {
     [ -n "$gemail" ] && git config --global user.email "$gemail"
   fi
 
+  # optional features (default off — Enter leaves them off)
+  local compress_toml="$BRAIN_STATE_DIR/compress/compress.toml"
+  if grep -Eqs '^ *enabled *= *true' <(sed -n '/^\[recall\]/,/^\[/p' "$compress_toml" 2>/dev/null); then
+    step_done "session recall enabled"
+  else
+    local reply=""
+    printf '  Enable session recall? It lets the brain search your PAST Claude Code\n'
+    printf '  session transcripts (which can contain sensitive text) for old commands\n'
+    printf '  and decisions. Off by default; recalled text is redacted on print.\n'
+    read -r -p "  Enable session recall? [y/N] " reply </dev/tty || reply=""
+    case "$reply" in
+      y|Y|yes|YES)
+        mkdir -p "$(dirname "$compress_toml")"
+        printf '\n[recall]\nenabled = true\n' >> "$compress_toml"
+        step_done "session recall enabled (brain recall \"query\")"
+        ;;
+      *) info "  session recall left off (enable later: add [recall] enabled = true to $compress_toml)" ;;
+    esac
+  fi
+
   # 7. done
   info "step 7/7: all set!"
   cat <<'CHEAT'
@@ -567,6 +587,7 @@ cmd_setup() {
     brain multi    power mode: other models drive natively (no phone control)
     brain auth X   redo any login (anthropic|chatgpt|grok|kimi|github)
     brain update   get the latest claude-brain
+    brain explore "question"   cheap-model repo navigation (discovery only)
 
 CHEAT
   if ask_yn "Start your brain session now?"; then
@@ -623,6 +644,14 @@ cmd_explore() {
   local launcher
   launcher="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/brain-compress"
   exec "$launcher" explore "$@"
+}
+
+# Session-history recall (OPT-IN, off by default — see brain setup). Recalled
+# text is untrusted data and is redacted on print.
+cmd_recall() {
+  local launcher
+  launcher="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/brain-compress"
+  exec "$launcher" recall "$@"
 }
 
 # ------------------------------------------------------------------- config
@@ -715,6 +744,7 @@ case "${1:-rc}" in
   consult)   shift; cmd_consult "$@" ;;
   compress)  shift; cmd_compress "$@" ;;
   explore)   shift; cmd_explore "$@" ;;
+  recall)    shift; cmd_recall "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;

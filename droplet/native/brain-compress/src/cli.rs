@@ -33,6 +33,7 @@ pub async fn run(args: Vec<String>) -> i32 {
         "json" => return crate::structured::run(rest.to_vec()).await,
         "explore" => return crate::explore::run(rest.to_vec()).await,
         "refs" => return crate::symbols::refs(rest.to_vec()).await,
+        "recall" => return crate::recall::run(rest.to_vec()).await,
         "read" | "grep" | "tree" => {
             let mut passthrough = vec![command.to_string()];
             passthrough.extend(rest.iter().cloned());
@@ -631,6 +632,7 @@ fn help_text() -> String {
   brain compress json [FILE|-] [--table] [--fields a,b.c]   structured projection (raw persisted)\n\
   brain explore QUESTION [--root P]     cheap-model repo navigation (discovery only)\n\
   brain compress refs SYMBOL [PATH] [--kind def|ref|call] [--json]   symbol usage map\n\
+  brain recall QUERY [--limit N]        search past session transcripts (OPT-IN, off by default)\n\
   brain compress discover               commands that could compress but were too complex\n\
   brain compress doctor                 probe proxy + re-report capability facts"
         .to_string()

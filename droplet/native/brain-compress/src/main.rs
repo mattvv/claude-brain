@@ -21,6 +21,7 @@ mod files;
 mod hook;
 mod http;
 mod ledger;
+mod recall;
 mod shell;
 mod structured;
 mod symbols;
@@ -62,6 +63,9 @@ async fn main() {
     } else if matches!(args.first().map(String::as_str), Some("explore")) {
         args.remove(0);
         explore::run(args).await
+    } else if matches!(args.first().map(String::as_str), Some("recall")) {
+        args.remove(0);
+        recall::run(args).await
     } else if matches!(args.first().map(String::as_str), Some("shell")) {
         args.remove(0);
         shell::run(args).await

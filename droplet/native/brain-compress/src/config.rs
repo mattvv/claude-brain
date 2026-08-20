@@ -33,6 +33,12 @@ pub struct Config {
     pub explore_max_pack_bytes: u64,
     /// Cap on rows printed by `brain compress refs` (full result persisted).
     pub symbols_max_results: u64,
+    /// Session-history recall (design §3). OPT-IN and OFF by default: it
+    /// searches past Claude Code transcripts, which may contain sensitive
+    /// text. The setup wizard offers to enable it.
+    pub recall_enabled: bool,
+    pub recall_max_files: u64,
+    pub recall_half_life_days: u64,
     pub path: PathBuf,
 }
 
@@ -55,6 +61,9 @@ impl Config {
             explore_effort: "low".to_string(),
             explore_max_pack_bytes: 96 * 1024,
             symbols_max_results: 200,
+            recall_enabled: false,
+            recall_max_files: 40,
+            recall_half_life_days: 14,
             path: state.join("compress/compress.toml"),
         }
     }
@@ -179,6 +188,33 @@ impl Config {
                     config.explore_max_pack_bytes = value.parse::<u64>().map_err(|error| {
                         format!(
                             "{}:{}: invalid explore.max_pack_bytes: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.enabled" => {
+                    config.recall_enabled = parse_bool(value).ok_or_else(|| {
+                        format!(
+                            "{}:{}: invalid boolean for recall.enabled",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.max_files" => {
+                    config.recall_max_files = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid recall.max_files: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "recall.half_life_days" => {
+                    config.recall_half_life_days = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid recall.half_life_days: {error}",
                             config.path.display(),
                             line_number + 1
                         )
