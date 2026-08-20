@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # Frozen-corpus A/B runner (compression plan §5.3).
 #
-# Sends every fixture in tests/compress/ab/fixtures/ twice against ONE model:
-#   control — context files inlined into the prompt, no response profile
+# Sends every fixture in tests/compress/ab/fixtures/ once per VARIANT against
+# ONE model, in randomized order, then reads provider ground-truth usage back
+# out of the ledger and reports paired median deltas with bootstrap CIs.
+#
+# Default variants (identical to the original two-arm design):
+#   control — context files inlined into the prompt, no extra flags
 #             (what an unguarded bridge would send)
 #   guarded — the same material via --context-file, plus --response <profile>
-# in randomized order, then reads provider ground-truth usage back out of the
-# ledger and reports paired median deltas with bootstrap confidence intervals.
+#
+# AB_VARIANTS_FILE overrides them: a TSV of `name<TAB>brain-ask args`, where
+# an EMPTY args column means control-style (inline context, no flags) and any
+# non-empty args mean guarded-style (--context-file + those args). The token
+# {profile} in args expands to the fixture's own response profile, e.g.:
+#   control
+#   guarded	--response {profile}
+#   guard-low	--response {profile} --effort low
 #
 #   AB_MODEL=grok-4.5 tests/compress/ab/run-ab.sh
 #
@@ -17,6 +27,10 @@
 #   AB_SLEEP    seconds between calls (default 2; use 0 against the fake proxy)
 #   AB_BIN      brain-compress binary (default: the crate's debug build)
 #   AB_RESULTS  results directory (default tests/compress/ab/results/<stamp>)
+#   AB_FIXTURES space-separated globs selecting a fixture subset (default all)
+#   AB_VARIANTS_FILE  variant TSV as above (default: control+guarded)
+#   AB_TASKS_FILE     resume an interrupted run: pass the not-yet-done tail of
+#               the original tasks.txt; result rows append instead of truncate
 #   BRAIN_STATE_DIR  defaults to $AB_RESULTS/state so the experiment's ledger
 #               stays separate from the live one. Afterwards,
 #               BRAIN_STATE_DIR=<results>/state brain compress savings
@@ -62,9 +76,29 @@ else
   touch "$RESULTS_JSONL"
 fi
 
-# Build the randomized task list: fixture x rep x arm. AB_TASKS_FILE overrides
-# it (used to resume an interrupted run: pass the not-yet-done tail of the
-# original tasks.txt; result rows append to the existing results.jsonl).
+# Variant table: name -> args template.
+declare -A VARIANTS
+VARIANT_ORDER=()
+if [ -n "${AB_VARIANTS_FILE:-}" ]; then
+  while IFS=$'\t' read -r vname vargs; do
+    vname="${vname%%[[:space:]]*}"
+    [ -n "$vname" ] || continue
+    case "$vname" in \#*) continue ;; esac
+    VARIANTS["$vname"]="$vargs"
+    VARIANT_ORDER+=("$vname")
+  done < "$AB_VARIANTS_FILE"
+  if [ "${#VARIANT_ORDER[@]}" -lt 2 ]; then
+    echo "run-ab: AB_VARIANTS_FILE needs at least two variants" >&2
+    exit 2
+  fi
+else
+  VARIANTS[control]=""
+  VARIANTS[guarded]="--response {profile}"
+  VARIANT_ORDER=(control guarded)
+fi
+
+# Build the randomized task list: fixture x rep x variant. AB_TASKS_FILE
+# overrides it (resume support).
 TASKS="$AB_RESULTS/tasks.txt"
 if [ -n "${AB_TASKS_FILE:-}" ]; then
   cp "$AB_TASKS_FILE" "$TASKS"
@@ -74,24 +108,36 @@ else
     for dir in "$FIXTURES"/*/; do
       name="$(basename "$dir")"
       [ -f "$dir/fixture.json" ] || continue
-      echo "$name $rep control" >> "$TASKS"
-      echo "$name $rep guarded" >> "$TASKS"
+      if [ -n "${AB_FIXTURES:-}" ]; then
+        keep=0
+        for pattern in $AB_FIXTURES; do
+          case "$name" in $pattern) keep=1 ;; esac
+        done
+        [ "$keep" = 1 ] || continue
+      fi
+      for vname in "${VARIANT_ORDER[@]}"; do
+        echo "$name $rep $vname" >> "$TASKS"
+      done
     done
   done
   shuf "$TASKS" -o "$TASKS"
 fi
 TOTAL="$(wc -l < "$TASKS")"
 if [ "$TOTAL" -eq 0 ]; then
-  echo "run-ab: no fixtures found under $FIXTURES" >&2
+  echo "run-ab: no fixtures matched under $FIXTURES" >&2
   exit 2
 fi
 
-echo "run-ab: model=$AB_MODEL tasks=$TOTAL results=$AB_RESULTS"
+echo "run-ab: model=$AB_MODEL variants=${VARIANT_ORDER[*]} tasks=$TOTAL results=$AB_RESULTS"
 
 INDEX=0
-while read -r name rep arm; do
+while read -r name rep variant; do
   INDEX=$((INDEX + 1))
   dir="$FIXTURES/$name"
+  if [ -z "${VARIANTS[$variant]+x}" ]; then
+    echo "run-ab: unknown variant '$variant' in task list" >&2
+    exit 2
+  fi
 
   # fixture.json: {"category": ..., "profile": ..., "prompt": ..., "context": [...]}
   mapfile -t META < <(python3 -c '
@@ -105,19 +151,30 @@ for c in f.get("context", []):
   promptfile="${META[2]}"
   ctx=("${META[@]:3}")
 
-  # Assemble the prompt for this arm. Control inlines the context bytes the way
-  # an unguarded bridge would paste them; guarded passes paths so brain-ask
-  # builds its context pack natively. Both arms see identical source material.
+  vargs_template="${VARIANTS[$variant]}"
+  vargs="${vargs_template//\{profile\}/$profile}"
+
+  # Assemble the prompt for this variant. Empty args = control-style: inline
+  # the context bytes the way an unguarded bridge would paste them. Non-empty
+  # args = guarded-style: pass paths so brain-ask builds its context pack
+  # natively. Both styles see identical source material.
   PROMPTF="$AB_RESULTS/prompt.tmp"
   cp "$dir/$promptfile" "$PROMPTF"
   ARGS=()
-  if [ "$arm" = "control" ]; then
+  if [ -z "$vargs" ]; then
+    expected_arm=control
     for c in "${ctx[@]:-}"; do
       [ -n "$c" ] || continue
       { printf '\n--- FILE: %s ---\n' "$c"; cat "$dir/$c"; } >> "$PROMPTF"
     done
   else
-    ARGS+=(--response "$profile")
+    read -r -a ARGS <<< "$vargs"
+    # The ledger marks a call guarded only when a known --response profile is
+    # present; mirror that so the arm-consistency check stays meaningful.
+    case " $vargs " in
+      *" --response "*) expected_arm=guarded ;;
+      *) expected_arm=control ;;
+    esac
     for c in "${ctx[@]:-}"; do
       [ -n "$c" ] || continue
       ARGS+=(--context-file "$dir/$c")
@@ -134,9 +191,9 @@ for c in f.get("context", []):
   # usage recorded here is exactly what the provider reported — no estimates.
   python3 -c '
 import json, sys
-ledger, before, fixture, category, rep, arm, rc = sys.argv[1:8]
+ledger, before, fixture, category, rep, arm, variant, rc = sys.argv[1:9]
 row = {"fixture": fixture, "category": category, "rep": int(rep),
-       "arm": arm, "exit": int(rc)}
+       "arm": arm, "variant": variant, "exit": int(rc)}
 try:
     lines = open(ledger).read().splitlines()[int(before):]
 except OSError:
@@ -162,15 +219,16 @@ if consults:
         "provider_model": entry.get("provider_model"),
     })
 print(json.dumps(row))' \
-    "$LEDGER" "$BEFORE" "$name" "$category" "$rep" "$arm" "$RC" >> "$RESULTS_JSONL"
+    "$LEDGER" "$BEFORE" "$name" "$category" "$rep" "$expected_arm" "$variant" "$RC" >> "$RESULTS_JSONL"
 
-  echo "  [$INDEX/$TOTAL] $name rep=$rep $arm exit=$RC"
+  echo "  [$INDEX/$TOTAL] $name rep=$rep $variant exit=$RC"
   [ "$AB_SLEEP" != "0" ] && sleep "$AB_SLEEP"
 done < "$TASKS"
 rm -f "$AB_RESULTS/prompt.tmp"
 
 echo
-python3 "$HERE/analyze.py" "$RESULTS_JSONL" | tee "$AB_RESULTS/report.txt"
+python3 "$HERE/analyze.py" "$RESULTS_JSONL" --compare "${VARIANT_ORDER[0]}" "${VARIANT_ORDER[1]}" \
+  | tee "$AB_RESULTS/report.txt"
 echo
 echo "run-ab: per-arm ground truth via the normal CLI:"
 echo "  BRAIN_STATE_DIR=$BRAIN_STATE_DIR $BIN compress savings"

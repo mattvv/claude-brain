@@ -47,7 +47,12 @@ def bootstrap_ci_of_median(values, iterations=BOOTSTRAP_ITERATIONS):
     return lower, upper
 
 
-def load_pairs(path):
+def load_pairs(path, variant_a, variant_b):
+    """Pair variant_a (baseline) against variant_b per fixture+rep.
+
+    Rows from variants outside the requested comparison are ignored (counted),
+    so one results.jsonl can hold a whole multi-variant experiment.
+    """
     rows = []
     with open(path) as handle:
         for line in handle:
@@ -57,7 +62,12 @@ def load_pairs(path):
 
     by_key = {}
     dropped = []
+    ignored = 0
     for row in rows:
+        variant = row.get("variant", row.get("arm"))
+        if variant not in (variant_a, variant_b):
+            ignored += 1
+            continue
         reasons = []
         if row.get("exit") != 0:
             reasons.append("non-zero exit")
@@ -71,17 +81,17 @@ def load_pairs(path):
         if reasons:
             dropped.append((row, "; ".join(reasons)))
             continue
-        by_key.setdefault((row["fixture"], row["rep"]), {})[row["arm"]] = row
+        by_key.setdefault((row["fixture"], row["rep"]), {})[variant] = row
 
     pairs = []
     for key in sorted(by_key):
-        arms = by_key[key]
-        if "control" in arms and "guarded" in arms:
-            pairs.append((key, arms["control"], arms["guarded"]))
+        variants = by_key[key]
+        if variant_a in variants and variant_b in variants:
+            pairs.append((key, variants[variant_a], variants[variant_b]))
         else:
-            only = next(iter(arms.values()))
-            dropped.append((only, "unpaired (other arm unusable)"))
-    return pairs, dropped
+            only = next(iter(variants.values()))
+            dropped.append((only, "unpaired (other variant unusable)"))
+    return pairs, dropped, ignored
 
 
 def deltas(pairs):
@@ -120,16 +130,31 @@ def describe(label, pairs):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: analyze.py <results.jsonl>", file=sys.stderr)
+    args = sys.argv[1:]
+    variant_a, variant_b = "control", "guarded"
+    if "--compare" in args:
+        index = args.index("--compare")
+        try:
+            variant_a, variant_b = args[index + 1], args[index + 2]
+        except IndexError:
+            print("usage: analyze.py <results.jsonl> [--compare A B]", file=sys.stderr)
+            return 2
+        del args[index:index + 3]
+    if len(args) != 1:
+        print("usage: analyze.py <results.jsonl> [--compare A B]", file=sys.stderr)
         return 2
-    pairs, dropped = load_pairs(sys.argv[1])
+    pairs, dropped, ignored = load_pairs(args[0], variant_a, variant_b)
 
-    print("Frozen-corpus A/B — provider ground-truth usage (guarded vs control, paired)")
+    print(
+        "Frozen-corpus A/B — provider ground-truth usage (%s vs %s, paired)"
+        % (variant_b, variant_a)
+    )
     print(
         "pairs: %d usable, %d rows dropped%s"
         % (len(pairs), len(dropped), "" if not dropped else " (see below)")
     )
+    if ignored:
+        print("rows from other variants (ignored): %d" % ignored)
     if not pairs:
         print("no usable pairs — nothing to report")
         return 1
@@ -174,8 +199,10 @@ def main():
             )
 
     report = {
+        "compare": [variant_a, variant_b],
         "pairs": len(pairs),
         "dropped": len(dropped),
+        "ignored_other_variants": ignored,
         "truncated_calls": truncated,
         "claim_threshold": CLAIM_THRESHOLD,
         "claimable": len(pairs) >= CLAIM_THRESHOLD,
@@ -185,7 +212,11 @@ def main():
             for category in categories
         },
     }
-    report_path = sys.argv[1].rsplit("/", 1)[0] + "/report.json"
+    suffix = (
+        "" if (variant_a, variant_b) == ("control", "guarded")
+        else "-%s-vs-%s" % (variant_b, variant_a)
+    )
+    report_path = "%s/report%s.json" % (args[0].rsplit("/", 1)[0], suffix)
     with open(report_path, "w") as handle:
         json.dump(report, handle, indent=2)
         handle.write("\n")

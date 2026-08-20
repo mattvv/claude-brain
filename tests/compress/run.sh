@@ -235,6 +235,20 @@ check "rollup splits output tokens per arm"  'grep -q "\"control_output_tokens\"
 check "rollup splits input tokens per arm"   'grep -q "\"control_input_tokens\": 1" "$WORK/ab-sav.json" && grep -q "\"guarded_input_tokens\": 1" "$WORK/ab-sav.json"'
 check "ground truth not claimable at n=15"   'grep -q "\"claimable\": false" "$WORK/ab-sav.json"'
 
+echo "== p1b: A/B variant arms =="
+ABV="$WORK/abv"
+printf 'control\nguarded\t--response {profile}\nguard-low\t--response {profile} --effort low\n' > "$WORK/variants.tsv"
+AB_MODEL=ab-model AB_SLEEP=0 AB_BIN="$BIN" AB_RESULTS="$ABV" BRAIN_STATE_DIR="$ABV/state" \
+  AB_FIXTURES='04-* 13-*' AB_VARIANTS_FILE="$WORK/variants.tsv" \
+  bash "$HERE/ab/run-ab.sh" >"$WORK/abv.log" 2>&1 && RC=0 || RC=$?
+check "variant runner completes"            '[ "'"$RC"'" = "0" ]'
+check "6 rows (2 fixtures x 3 variants)"    '[ "$(wc -l < "$ABV/results.jsonl")" = "6" ]'
+check "rows carry the variant name"         'grep -q "\"variant\": \"guard-low\"" "$ABV/results.jsonl"'
+check "custom compare pairs the right arms" 'python3 "$HERE/ab/analyze.py" "$ABV/results.jsonl" --compare guarded guard-low | grep -q "guard-low vs guarded"'
+check "other-variant rows are ignored"      'python3 "$HERE/ab/analyze.py" "$ABV/results.jsonl" --compare control guard-low | grep -q "(ignored): 2"'
+check "custom compare writes its own json"  '[ -f "$ABV/report-guard-low-vs-guarded.json" ] || python3 "$HERE/ab/analyze.py" "$ABV/results.jsonl" --compare guarded guard-low >/dev/null && [ -f "$ABV/report-guard-low-vs-guarded.json" ]'
+
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
