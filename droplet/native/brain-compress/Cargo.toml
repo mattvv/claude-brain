@@ -1,0 +1,23 @@
+[package]
+name = "brain-compress"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native consultation, artifact, and accounting foundation for claude-brain"
+
+[dependencies]
+# Async runtime. Full IO/fs/process/signal so the whole binary is non-blocking;
+# we assume a real machine and soak-test later rather than shaving features.
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "time", "signal", "process"] }
+# HTTP client. The proxy is loopback plaintext (http://127.0.0.1), so no TLS
+# feature is enabled — that also keeps the build free of openssl/rustls. "stream"
+# gives us bytes_stream() for incremental SSE without buffering the whole body.
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde_json = "1.0.140"
+sha2 = "0.10.8"
+libc = "0.2.172"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

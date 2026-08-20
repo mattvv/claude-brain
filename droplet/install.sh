@@ -7,10 +7,44 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/state/brain"
-for tool in brain brain-ask brain-proxy-build; do
+for tool in brain brain-ask brain-compress brain-proxy-build; do
   chmod 755 "$REPO_DIR/droplet/bin/$tool"
   ln -sf "$REPO_DIR/droplet/bin/$tool" "$HOME/.local/bin/$tool"
 done
+chmod 755 "$REPO_DIR/droplet/libexec/legacy/brain-ask"
+
+# Build and install the native brain-compress binary (async consultation +
+# observe-only token accounting). Best effort: if the Rust toolchain is missing
+# or the build fails, brain-ask transparently falls back to the bundled Bash
+# implementation and compression is simply unavailable. Never fatal to install.
+CRATE_DIR="$REPO_DIR/droplet/native/brain-compress"
+NATIVE_BASE="$HOME/.local/share/brain/native"
+if command -v cargo >/dev/null 2>&1 && [ -f "$CRATE_DIR/Cargo.toml" ]; then
+  version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$CRATE_DIR/Cargo.toml" | head -1)"
+  version="${version:-0.1.0}"
+  dest="$NATIVE_BASE/$version"
+  if [ ! -x "$dest/brain-compress" ]; then
+    echo "building brain-compress $version (this can take a few minutes)…"
+    if ( cd "$CRATE_DIR" && cargo build --release --quiet ); then
+      mkdir -p "$dest"
+      install -m 755 "$CRATE_DIR/target/release/brain-compress" "$dest/brain-compress"
+      printf '%s\n' "$version" > "$dest/VERSION"
+      ln -sfn "$version" "$NATIVE_BASE/current"
+      echo "brain-compress $version installed"
+    else
+      echo "warning: brain-compress build failed — brain-ask will use the Bash fallback" >&2
+    fi
+  else
+    ln -sfn "$version" "$NATIVE_BASE/current"
+  fi
+fi
+
+# Seed the compression config (observe-only) if the user has none yet.
+COMPRESS_DIR="$HOME/.local/state/brain/compress"
+mkdir -p "$COMPRESS_DIR"
+if [ ! -f "$COMPRESS_DIR/compress.toml" ] && [ -f "$REPO_DIR/droplet/templates/compress.toml.tmpl" ]; then
+  cp "$REPO_DIR/droplet/templates/compress.toml.tmpl" "$COMPRESS_DIR/compress.toml"
+fi
 
 # Register the Claude Code integration: model guard, consultation progress
 # hooks, and the statusline. All three are keyed by script name so re-running
@@ -21,14 +55,18 @@ if command -v jq >/dev/null 2>&1; then
   SETTINGS="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  MANAGED='model-guard|consult-poll-guard|consult-progress'
+  MANAGED='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read'
   jq --arg hooks "$HOOKS_DIR" \
      --arg statusline "$REPO_DIR/droplet/claude/statusline.sh" \
      --arg managed "$MANAGED" '
     def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
     .hooks.PreToolUse = (strip(.hooks.PreToolUse) + [
       {matcher: "Agent|Task", hooks: [{type: "command", command: ($hooks + "/model-guard.sh")}]},
-      {matcher: "Bash",       hooks: [{type: "command", command: ($hooks + "/consult-poll-guard.sh")}]}
+      {matcher: "Bash", hooks: [
+        {type: "command", command: ($hooks + "/consult-poll-guard.sh")},
+        {type: "command", command: ($hooks + "/brain-compress-bash.sh")}
+      ]},
+      {matcher: "Read", hooks: [{type: "command", command: ($hooks + "/brain-compress-read.sh")}]}
     ])
     | .hooks.PostToolUse = (strip(.hooks.PostToolUse) + [
       {matcher: "*", hooks: [{type: "command", command: ($hooks + "/consult-progress.sh")}]}

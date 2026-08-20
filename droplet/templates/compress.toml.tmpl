@@ -1,0 +1,44 @@
+# claude-brain compression config (Stage 1: observe-only).
+# Managed by `brain compress`. Kill switch: `brain compress off` or
+# `touch $BRAIN_STATE_DIR/compress/DISABLED` (works even if this file is bad).
+version = 1
+
+# Master switch for the observe-only subsystem. When false, brain-ask behaves
+# exactly like the legacy Bash implementation and records nothing.
+enabled = true
+
+# Stage 1 only supports observe. Compression modes arrive in later stages.
+mode = "observe"
+
+[artifacts]
+# Content-addressed raw-artifact store, so a future lossy view always has an
+# exact recoverable source (`brain compress show <id> --full`).
+quota_bytes = 536870912   # 512 MiB
+default_ttl_days = 30
+content_addressed = true
+
+[accounting]
+# Byte->token estimate is ALWAYS labelled an estimate; provider-reported usage is
+# the ground truth for consultations. Dollars are never printed.
+estimated_bytes_per_token = 4.0
+print_dollars = false
+# Suppress measured-savings percentages until this many compressed samples exist.
+minimum_claim_samples = 30
+
+[ledger]
+format = "jsonl"
+hourly_rollups = true
+
+[retention]
+# Newest N consult logs kept under $BRAIN_STATE_DIR/consult (matches legacy).
+consult_logs = 20
+
+[file_tools]
+# `brain compress read/grep/tree` are always available. The Read guard controls
+# what happens when the model reads a large file whole:
+#   observe (default) — record it for `brain compress discover`, change nothing
+#   enforce           — deny it with guidance to use `brain compress read`
+#   off               — no guard
+read_guard = "observe"
+large_file_lines = 800
+large_file_bytes = 49152

@@ -48,6 +48,23 @@ agents/hooks/routing, and restarts the router. Safe to run mid-session; a new Cl
 binary applies on the next session restart. The `brain` launcher also checks for updates
 at startup and prompts.
 
+**Compression (save tokens, both directions)**: a `brain-compress` subsystem compacts
+verbose output while keeping the exact original recoverable.
+- Shell output is compacted automatically for eligible commands (git log/diff, tests,
+  grep, find…) via a hook — you do nothing. Every compacted result starts with
+  `[brain-compress id=bc_… lossy=yes]`; get the full original with
+  `brain compress show <id> --full` (or `--lines A:B`).
+- For a large file, prefer `brain compress read PATH --outline` (signatures),
+  `--query '<goal>'` (matching regions), or `--lines A:B` over reading it whole.
+- When you consult a `brain-*` model about files, the bridge should pass them with
+  `brain-ask --context-file PATH` (or `--context-range PATH@A:B`) rather than pasting
+  them, and may add `--response review|debug|architecture|concise` for a terser answer.
+- Report usage honestly with `brain compress savings` / `brain compress stats` (three
+  separate classes: provider ground-truth, measured bytes, estimated tokens — never a
+  single hyped number). `brain compress discover` lists missed opportunities. Turn it all
+  off with `brain compress off`. Nothing is ever silently dropped: every lossy view has a
+  recovery handle, and errors, diffs, and edit sources are never compressed.
+
 **Never** print or copy the contents of `~/.config/brain/token`, `~/.config/brain/proxy-config.yaml`,
 or anything in `~/.cli-proxy-api/` — they are live credentials. Never open firewall ports
 (the router must stay loopback-only). `brain status` is your health check.
