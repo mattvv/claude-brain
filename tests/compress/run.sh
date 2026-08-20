@@ -199,6 +199,22 @@ check "whole-file pack is unnumbered"      '"$BIN" compress show "$PKF" --full |
 check "whole-file pack has no line prefix" '! "$BIN" compress show "$PKF" --full | grep -q "1	alpha"'
 check "range pack keeps line numbers"      '"$BIN" compress show "$PKR" --full | grep -q "2	beta"'
 
+
+echo "== statusline savings segment =="
+SL="$HERE/../../droplet/claude/statusline.sh"
+SLIN='{"model":{"display_name":"T"},"cwd":"/tmp/x"}'
+mkdir -p "$BRAIN_STATE_DIR/compress"
+printf 'saved_bytes=210000 estimated_tokens=52500 divisor=4 compressed_samples=41 guarded_calls=3 updated_at=%s\n' "$(date +%s)" > "$BRAIN_STATE_DIR/compress/summary.txt"
+SLOUT="$(printf '%s' "$SLIN" | bash "$SL")"
+check "statusline shows labelled estimate"  'printf "%s" "$SLOUT" | grep -q "52k tok est"'
+printf 'saved_bytes=100 estimated_tokens=25 divisor=4 compressed_samples=3 guarded_calls=0 updated_at=%s\n' "$(date +%s)" > "$BRAIN_STATE_DIR/compress/summary.txt"
+SLOUT="$(printf '%s' "$SLIN" | bash "$SL")"
+check "statusline suppresses under min samples" '! printf "%s" "$SLOUT" | grep -q "tok est"'
+printf 'saved_bytes=210000 estimated_tokens=52500 divisor=4 compressed_samples=41 guarded_calls=3 updated_at=1000\n' > "$BRAIN_STATE_DIR/compress/summary.txt"
+SLOUT="$(printf '%s' "$SLIN" | bash "$SL")"
+check "statusline suppresses stale summary" '! printf "%s" "$SLOUT" | grep -q "tok est"'
+rm -f "$BRAIN_STATE_DIR/compress/summary.txt"
+
 echo "== p1: frozen-corpus A/B harness (offline, ab-model) =="
 AB_RES="$WORK/ab"
 AB_MODEL=ab-model AB_SLEEP=0 AB_BIN="$BIN" AB_RESULTS="$AB_RES" \
