@@ -12,14 +12,14 @@
 # shellcheck disable=SC2034  # captured output is referenced inside check's eval
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd -P "$HERE/../.." && pwd)"
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 check(){ if ( set +o pipefail; eval "$2" ); then ok "$1"; else bad "$1 [$2]"; fi; }
 
-TMP="$(mktemp -d)"
+TMP="$(cd -P "$(mktemp -d)" && pwd)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "== install.sh --plan (changes nothing) =="

@@ -17,7 +17,10 @@ check(){ if ( set +o pipefail; eval "$2" ); then ok "$1"; else bad "$1 [$2]"; fi
 # eq NAME EXPECTED ACTUAL
 eq()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi; }
 
-TMP="$(mktemp -d)"
+# Resolved on purpose: on macOS mktemp -d returns /var/... which is a symlink
+# to /private/var/..., and abs_path resolves it. Comparing against an
+# unresolved root would fail the helper for being right.
+TMP="$(cd -P "$(mktemp -d)" && pwd)"
 trap 'rm -rf "$TMP"' EXIT
 STUB="$TMP/stub"; mkdir -p "$STUB"
 
@@ -42,12 +45,17 @@ eq "unsupported OS is named, not guessed" unsupported "$(brain_os)"
 rm -f "$STUB/uname"
 
 echo "== package managers =="
-# Precedence: brew wins on a Mac even when other managers exist in a container.
-stub brew 'exit 0'; stub pacman 'exit 0'
-eq "brew wins when present"  brew "$(pkg_manager)"
+# Precedence, against ONLY the stubs — a real Mac has a real Homebrew on PATH,
+# so dropping the brew stub would not drop brew. pkg_manager needs nothing but
+# `command -v`, so an all-stub PATH is safe.
+stub brew 'exit 0'; stub pacman 'exit 0'; stub apt-get 'exit 0'
+eq "brew wins when present"   brew   "$(PATH="$STUB" pkg_manager)"
 rm -f "$STUB/brew"
-eq "pacman next"             pacman "$(pkg_manager)"
+eq "pacman beats apt"         pacman "$(PATH="$STUB" pkg_manager)"
 rm -f "$STUB/pacman"
+eq "apt is last"              apt    "$(PATH="$STUB" pkg_manager)"
+rm -f "$STUB/apt-get"
+eq "none when nothing is installed" none "$(PATH="$STUB" pkg_manager)"
 
 eq "gh is github-cli on Arch"       github-cli "$(pkg_name gh pacman)"
 eq "gh is gh on brew"               gh         "$(pkg_name gh brew)"
@@ -59,10 +67,10 @@ eq "unknown names pass through"     tmux       "$(pkg_name tmux apt)"
 
 stub pacman 'exit 0'
 eq "pacman install is non-interactive" \
-   "sudo pacman -S --needed --noconfirm git jq" "$(pkg_install --dry-run git jq)"
+   "sudo pacman -S --needed --noconfirm git jq" "$(PATH="$STUB" pkg_install --dry-run git jq)"
 rm -f "$STUB/pacman"
 stub brew 'exit 0'
-eq "brew install needs no sudo" "brew install git jq" "$(pkg_install --dry-run git jq)"
+eq "brew install needs no sudo" "brew install git jq" "$(PATH="$STUB" pkg_install --dry-run git jq)"
 rm -f "$STUB/brew"
 check "dry-run never executes anything" 'pkg_install --dry-run definitely-not-a-package >/dev/null'
 
