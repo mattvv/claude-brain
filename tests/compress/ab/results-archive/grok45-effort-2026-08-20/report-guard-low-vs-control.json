@@ -1,0 +1,86 @@
+{
+  "compare": [
+    "control",
+    "guard-low"
+  ],
+  "pairs": 12,
+  "dropped": 0,
+  "ignored_other_variants": 24,
+  "truncated_calls": {
+    "control": 0,
+    "guarded": 0
+  },
+  "claim_threshold": 30,
+  "claimable": false,
+  "overall": {
+    "pairs": 12,
+    "in_abs": {
+      "median": 44.5,
+      "ci95": [
+        -26.0,
+        112.0
+      ]
+    },
+    "out_abs": {
+      "median": -2408.0,
+      "ci95": [
+        -3045.0,
+        -1802.0
+      ]
+    },
+    "in_pct": {
+      "median": -0.3368009184414609
+    },
+    "out_pct": {
+      "median": -78.04498634120344
+    }
+  },
+  "categories": {
+    "implementation": {
+      "pairs": 6,
+      "in_abs": {
+        "median": -24.5,
+        "ci95": [
+          -152.5,
+          233.0
+        ]
+      },
+      "out_abs": {
+        "median": -1802.0,
+        "ci95": [
+          -2408.0,
+          -515.0
+        ]
+      },
+      "in_pct": {
+        "median": -5.284552845528455
+      },
+      "out_pct": {
+        "median": -69.71670759066288
+      }
+    },
+    "review": {
+      "pairs": 6,
+      "in_abs": {
+        "median": 112.0,
+        "ci95": [
+          -336.0,
+          176.0
+        ]
+      },
+      "out_abs": {
+        "median": -3073.5,
+        "ci95": [
+          -5729.5,
+          -2437.5
+        ]
+      },
+      "in_pct": {
+        "median": 7.245780156442981
+      },
+      "out_pct": {
+        "median": -79.12206719814702
+      }
+    }
+  }
+}

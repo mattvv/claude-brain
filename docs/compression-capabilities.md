@@ -280,3 +280,32 @@ routing (send review consults to a GPT-family model) and/or grok effort
 (measured separately), not more wording changes. Guarded input overhead is a
 steady ~+100 tokens/call (context-pack framing + profile instruction) on this
 corpus's small fixtures.
+
+## H13 — Effort lever SOLVES the grok review/implementation problem ✅
+
+Variant-arm A/B on the H10 problem categories (review + implementation
+fixtures, grok-4.5, 2 reps, variants control / guarded / guard-low
+(`--effort low`) / guard-med, 2026-08-20; one provider stall dropped honestly;
+evidence tests/compress/ab/results-archive/grok45-effort-2026-08-20/).
+Paired medians:
+
+| Comparison (11-12 pairs) | output tokens/call |
+|---|---|
+| guarded vs control | +53.3%, CI crosses zero — profiles alone still no-op/hurt (H10 reconfirmed) |
+| **guard-low vs guarded** | **−2560 (−83.1%), CI [−4659, −1917]** |
+| **guard-low vs control** | **−2408 (−78.0%), CI [−3045, −1802]** |
+| guard-med vs guarded | −7.3%, CI crosses zero — medium is not a lever |
+
+Input tokens are flat across effort levels (the lever cuts grok's reasoning
+burn, which its output_tokens include).
+
+**Quality spot-check (promotion rule):** on the seeded-bug review fixture the
+guard-low answer (304 output tokens) reported ALL five seeded issues (SQL
+injection, mutable default, missing commit, shell=True injection, debug=True)
+plus two genuine extras, as a findings-only list — the same coverage the
+2,059-token guarded answer had.
+
+**Promoted:** grok-4.5 consults using `--response review|implementation`
+should pass `--effort low` (wired into the bridge agent docs / routing
+guidance). Together with H12 the H10 problem has two proven fixes: route
+review to a GPT-family model, or keep grok and drop effort to low.
