@@ -16,12 +16,13 @@ DEFAULT_REGION="nyc3"
 DEFAULT_SIZE="s-1vcpu-2gb"
 
 # Flags let install.sh pass the answers straight through.
-FLAG_NAME="" FLAG_REGION="" FLAG_SIZE=""
+FLAG_NAME="" FLAG_REGION="" FLAG_SIZE="" FLAG_REF="main"
 while [ $# -gt 0 ]; do
   case "$1" in
     --name)   FLAG_NAME="${2:?}"; shift 2 ;;
     --region) FLAG_REGION="${2:?}"; shift 2 ;;
     --size)   FLAG_SIZE="${2:?}"; shift 2 ;;
+    --ref)    FLAG_REF="${2:?}"; shift 2 ;;
     -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 1 ;;
   esac
@@ -101,6 +102,14 @@ fi
 # ---- create ----------------------------------------------------------------
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 curl -fsSL "$REPO_RAW/cloud-init.yaml" -o "$TMP/cloud-init.yaml"
+# Installing an unmerged branch: the droplet must clone that ref too, or it
+# would boot with main's tree and none of the code being tested.
+if [ "$FLAG_REF" != main ]; then
+  sed -i.bak "s|git clone https://github.com/mattvv/claude-brain.git|git clone --branch $FLAG_REF https://github.com/mattvv/claude-brain.git|" \
+    "$TMP/cloud-init.yaml"
+  rm -f "$TMP/cloud-init.yaml.bak"
+  say "installing branch: $FLAG_REF"
+fi
 
 bold "Creating your droplet (takes about a minute)..."
 doctl compute droplet create "$NAME" \

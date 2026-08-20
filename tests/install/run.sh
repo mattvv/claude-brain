@@ -40,6 +40,19 @@ check "droplet plan uses doctl with the chosen region/size" \
   'printf %s "$PLAN_DO" | grep -q "doctl compute droplet create" && printf %s "$PLAN_DO" | grep -q "sfo3" && printf %s "$PLAN_DO" | grep -q "s-2vcpu-4gb"'
 
 check "unknown flags are refused"  '! bash "$REPO/install.sh" --nonsense >/dev/null 2>&1'
+
+# --ref installs a branch that is not merged yet (how a new platform gets
+# tested before release). It has to reach the clone, the raw URL and the SSH
+# re-run, or a branch install would pull half of main.
+REFDIR="$TMP/refscript"; mkdir -p "$REFDIR"; cp "$REPO/install.sh" "$REFDIR/"
+PLAN_REF="$(BRAIN_CLONE_DIR="$TMP/refclone" bash "$REFDIR/install.sh" --plan --here --ref somebranch 2>&1)"
+check "clones the requested ref" \
+  'printf %s "$PLAN_REF" | grep -q -- "clone --quiet --branch .somebranch."'
+PLAN_REF_SSH="$(bash "$REPO/install.sh" --plan --ssh me@box --ref somebranch 2>&1)"
+check "ssh re-run fetches and passes the ref" \
+  'printf %s "$PLAN_REF_SSH" | grep -q "claude-brain/somebranch/install.sh" && printf %s "$PLAN_REF_SSH" | grep -q -- "--ref somebranch"'
+PLAN_MAIN="$(BRAIN_CLONE_DIR="$TMP/refclone" bash "$REFDIR/install.sh" --plan --here 2>&1)"
+check "defaults to main" 'printf %s "$PLAN_MAIN" | grep -q -- "clone --quiet --branch .main."'
 check "--plan created nothing"     '[ ! -d /tmp/ws ]'
 
 echo "== bootstrap.sh --dry-run (changes nothing) =="

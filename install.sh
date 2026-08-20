@@ -12,12 +12,20 @@
 #   install.sh --ssh user@host [same flags]
 #   install.sh --digitalocean [--name N] [--region nyc3] [--size s-1vcpu-2gb]
 #
+# --ref BRANCH installs an unmerged branch (used to test a new platform before
+# release); it is threaded through the clone, SSH re-run and cloud-init.
+#
 # --plan prints everything it would do and changes nothing.
 
 set -euo pipefail
 
 REPO_URL="${BRAIN_REPO_URL:-https://github.com/mattvv/claude-brain.git}"
-REPO_RAW="${BRAIN_REPO_RAW:-https://raw.githubusercontent.com/mattvv/claude-brain/main}"
+# Which branch/tag to install. Defaults to main; --ref lets you install a
+# branch that isn't merged yet, which is how this gets tested on a new platform
+# before release. Everything downstream (the clone, the raw URLs, the SSH
+# re-run, the droplet's cloud-init) follows it, so a branch install never
+# silently pulls half of main.
+REPO_REF="${BRAIN_REPO_REF:-main}"
 CLONE_DIR="${BRAIN_CLONE_DIR:-$HOME/claude-brain}"
 
 TARGET=""
@@ -49,6 +57,7 @@ while [ $# -gt 0 ]; do
     --autostart)      AUTOSTART=1; shift ;;
     --yes|-y)         ASSUME_YES=1; shift ;;
     --plan|--dry-run) PLAN=1; shift ;;
+    --ref)            REPO_REF="${2:?--ref needs a branch or tag}"; shift 2 ;;
     --name)           DO_NAME="${2:?}"; shift 2 ;;
     --region)         DO_REGION="${2:?}"; shift 2 ;;
     --size)           DO_SIZE="${2:?}"; shift 2 ;;
@@ -56,6 +65,8 @@ while [ $# -gt 0 ]; do
     *) die "unknown option: $1 (try --help)" ;;
   esac
 done
+
+REPO_RAW="${BRAIN_REPO_RAW:-https://raw.githubusercontent.com/mattvv/claude-brain/$REPO_REF}"
 
 # Everything lives in main() so a truncated download cannot execute half a
 # script, and so ssh calls cannot swallow the rest of it under curl|bash.
@@ -81,6 +92,7 @@ fi
 # ---- remote targets just re-run this script over there ----------------------
 if [ "$TARGET" = ssh ]; then
   local_flags="--here"
+  [ "$REPO_REF" != main ] && local_flags="$local_flags --ref $REPO_REF"
   [ -n "$SCOPE" ]     && local_flags="$local_flags --scope $SCOPE"
   [ -n "$WORKSPACE" ] && local_flags="$local_flags --workspace $WORKSPACE"
   [ -n "$LINK" ]      && local_flags="$local_flags --link $LINK"
@@ -103,7 +115,7 @@ if [ "$TARGET" = droplet ]; then
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   curl -fsSL "$REPO_RAW/host/provision/digitalocean.sh" -o "$tmp/do.sh" 2>/dev/null \
     || cp "$(dirname "$0")/host/provision/digitalocean.sh" "$tmp/do.sh"
-  exec bash "$tmp/do.sh" --name "$DO_NAME" --region "$DO_REGION" --size "$DO_SIZE"
+  exec bash "$tmp/do.sh" --name "$DO_NAME" --region "$DO_REGION" --size "$DO_SIZE" --ref "$REPO_REF"
 fi
 
 # ---- this computer ----------------------------------------------------------
@@ -124,9 +136,12 @@ if [ -f "$here/host/bootstrap.sh" ]; then
 else
   REPO="$CLONE_DIR"
   if [ -d "$REPO/.git" ]; then
-    step "git -C '$REPO' pull --ff-only --quiet || true"
+    # -B tracks origin/$REPO_REF, so `brain update`'s later `git pull --ff-only`
+    # keeps working on whatever ref was installed.
+    step "git -C '$REPO' fetch --quiet origin '$REPO_REF'"
+    step "git -C '$REPO' checkout --quiet -B '$REPO_REF' 'origin/$REPO_REF'"
   else
-    step "git clone --quiet '$REPO_URL' '$REPO'"
+    step "git clone --quiet --branch '$REPO_REF' '$REPO_URL' '$REPO'"
   fi
 fi
 
@@ -165,7 +180,7 @@ fi
 # ---- show the plan ----------------------------------------------------------
 bold ""
 bold "Plan"
-say  "  repo:      $REPO"
+say  "  repo:      $REPO${REPO_REF:+ ($REPO_REF)}"
 say  "  scope:     $SCOPE${WORKSPACE:+ ($WORKSPACE)}"
 say  "  accounts:  claude${LINK:+, $(printf '%s' "$LINK" | tr ',' ' ' | tr -s ' ' | sed 's/ /, /g')}"
 say  "  autostart: $([ "$AUTOSTART" -eq 1 ] && echo yes || echo no)"
