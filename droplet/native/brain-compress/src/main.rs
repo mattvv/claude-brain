@@ -23,6 +23,7 @@ mod http;
 mod ledger;
 mod shell;
 mod structured;
+mod symbols;
 mod util;
 
 use std::env;

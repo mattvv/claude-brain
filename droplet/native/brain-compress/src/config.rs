@@ -31,6 +31,8 @@ pub struct Config {
     pub explore_model: String,
     pub explore_effort: String,
     pub explore_max_pack_bytes: u64,
+    /// Cap on rows printed by `brain compress refs` (full result persisted).
+    pub symbols_max_results: u64,
     pub path: PathBuf,
 }
 
@@ -52,6 +54,7 @@ impl Config {
             explore_model: "gpt-5.6-luna".to_string(),
             explore_effort: "low".to_string(),
             explore_max_pack_bytes: 96 * 1024,
+            symbols_max_results: 200,
             path: state.join("compress/compress.toml"),
         }
     }
@@ -176,6 +179,15 @@ impl Config {
                     config.explore_max_pack_bytes = value.parse::<u64>().map_err(|error| {
                         format!(
                             "{}:{}: invalid explore.max_pack_bytes: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "symbols.max_results" => {
+                    config.symbols_max_results = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid symbols.max_results: {error}",
                             config.path.display(),
                             line_number + 1
                         )

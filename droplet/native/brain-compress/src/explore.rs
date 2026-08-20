@@ -23,15 +23,15 @@ use std::path::{Path, PathBuf};
 /// drift apart; BRAIN_EXPLORE_SYSTEM overrides for experiments.
 const SYSTEM_PROMPT: &str = include_str!("../../../claude/explore-system.md");
 
-const TEXT_EXTENSIONS: &[&str] = &[
+pub(crate) const TEXT_EXTENSIONS: &[&str] = &[
     "rs", "py", "ts", "tsx", "js", "jsx", "go", "sh", "bash", "c", "h", "cpp", "hpp",
     "java", "rb", "php", "md", "toml", "yaml", "yml", "json", "sql", "css", "html",
 ];
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", "dist", "build", ".venv"];
-const MAX_FILES_SCANNED: usize = 2000;
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", "dist", "build", ".venv"];
+pub(crate) const MAX_FILES_SCANNED: usize = 2000;
 const MAX_SCAN_BYTES: u64 = 256 * 1024;
 const SMALL_FILE_WHOLE: usize = 12 * 1024;
-const MAX_DEPTH: usize = 6;
+pub(crate) const MAX_DEPTH: usize = 6;
 
 pub async fn run(rest: Vec<String>) -> i32 {
     match run_inner(rest).await {
@@ -224,7 +224,7 @@ fn scan(root: &Path, tokens: &[String]) -> Result<Vec<Candidate>, String> {
     Ok(out)
 }
 
-fn walk(dir: &Path, depth: usize, scanned: &mut usize, visit: &mut dyn FnMut(&Path, u64)) {
+pub(crate) fn walk(dir: &Path, depth: usize, scanned: &mut usize, visit: &mut dyn FnMut(&Path, u64)) {
     if depth > MAX_DEPTH || *scanned >= MAX_FILES_SCANNED {
         return;
     }

@@ -39,6 +39,7 @@ struct ReadArgs {
     lines: Option<(usize, usize)>,
     query: Option<String>,
     outline: bool,
+    symbols: bool,
     context: usize,
 }
 
@@ -47,6 +48,7 @@ fn parse_read(rest: Vec<String>) -> Result<ReadArgs, String> {
     let mut lines = None;
     let mut query = None;
     let mut outline = false;
+    let mut symbols = false;
     let mut context = 2usize;
     let mut i = 0;
     while i < rest.len() {
@@ -71,6 +73,7 @@ fn parse_read(rest: Vec<String>) -> Result<ReadArgs, String> {
                 context = rest.get(i).ok_or("--context requires N")?.parse().map_err(|_| "invalid --context")?;
             }
             "--outline" => outline = true,
+            "--symbols" => symbols = true,
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => {
                 if path.is_some() {
@@ -82,10 +85,11 @@ fn parse_read(rest: Vec<String>) -> Result<ReadArgs, String> {
         i += 1;
     }
     Ok(ReadArgs {
-        path: path.ok_or("usage: brain compress read PATH [--lines A:B] [--query T] [--outline]")?,
+        path: path.ok_or("usage: brain compress read PATH [--lines A:B] [--query T] [--outline|--symbols]")?,
         lines,
         query,
         outline,
+        symbols,
         context,
     })
 }
@@ -117,7 +121,9 @@ async fn read(rest: Vec<String>) -> Result<i32, String> {
 
     let large_lines = config.as_ref().map(|c| c.large_file_lines).unwrap_or(800);
 
-    let (body, lossy) = if let Some((a, b)) = args.lines {
+    let (body, lossy) = if args.symbols {
+        crate::symbols::symbols_view(Path::new(&args.path), &text).await
+    } else if let Some((a, b)) = args.lines {
         (range_view(&all, a, b), a > 1 || b < total)
     } else if let Some(q) = &args.query {
         query_view(&all, q, args.context)
@@ -143,7 +149,13 @@ async fn read(rest: Vec<String>) -> Result<i32, String> {
     // Duplicate-result elision (design §5a), lossy discovery views only: a
     // lossless whole-file view can serve as edit preparation and is never
     // elided. The reference recovers through the NEW artifact.
-    let view_kind = if let Some((a, b)) = args.lines {
+    let view_kind = if args.symbols {
+        // The backend is part of the view identity: a structural symbols view
+        // and the lexical fallback are different projections of the same bytes
+        // and must never elide against each other.
+        let backend = if crate::symbols::helper_binary().is_some() { "ts" } else { "lex" };
+        format!("read:symbols:{backend}:{}", args.path)
+    } else if let Some((a, b)) = args.lines {
         format!("read:lines:{a}:{b}:{}", args.path)
     } else if let Some(q) = &args.query {
         format!("read:query:{q}:{}", args.path)

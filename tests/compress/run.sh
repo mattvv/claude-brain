@@ -38,6 +38,18 @@ fi
 ln -sf "$(basename "$BIN")" "$(dirname "$BIN")/brain-ask"
 BA="$(dirname "$BIN")/brain-ask"
 
+# Symbol helper (tree-sitter). Build before HOME is sandboxed so cargo's real
+# cache is used; if a prebuilt is supplied or the build fails, degrade — the
+# symbol checks then only exercise the lexical fallback.
+SYMCRATE="$HERE/../../droplet/native/brain-symbols"
+if [ -n "${BRAIN_SYMBOLS_BIN:-}" ]; then
+  SYMBIN="$BRAIN_SYMBOLS_BIN"
+elif [ -d "$SYMCRATE" ] && ( cd "$SYMCRATE" && cargo build --quiet 2>/dev/null ); then
+  SYMBIN="$SYMCRATE/target/debug/brain-symbols"
+else
+  SYMBIN=""
+fi
+
 WORK="$(mktemp -d)"
 trap '[ -n "${PROXY:-}" ] && kill "$PROXY" 2>/dev/null; rm -rf "$WORK"' EXIT
 export HOME="$WORK/home"
@@ -266,6 +278,39 @@ EXID="$(grep -oE "id=bc_[A-Z0-9]+" "$WORK/ex.out" | head -1 | sed s/id=//)"
 check "explore pack persisted + recoverable"  '"$BIN" compress show "'"$EXID"'" --full 2>/dev/null | grep -q BRAIN_EXPLORE_PACK || "$BIN" compress show "$EXID" --full | grep -q BRAIN_EXPLORE_PACK'
 check "explore pack contains the source file" '"$BIN" compress show "$EXID" --full | grep -q "frob.rs"'
 check "explore refuses Claude models"         '! "$BIN" explore "x frobnicate" --root "$EXROOT" --model claude-fable >/dev/null 2>&1'
+
+
+echo "== symbols: refs + read --symbols =="
+SYMROOT="$WORK/symrepo"
+mkdir -p "$SYMROOT"
+cat > "$SYMROOT/lib.rs" <<'RSEOF'
+pub fn frobnicate(x: u32) -> u32 { x + 1 }
+pub struct Widget;
+RSEOF
+cat > "$SYMROOT/main.rs" <<'RSEOF'
+mod lib;
+fn main() {
+    let y = lib::frobnicate(41);
+    let _w = lib::Widget;
+    println!("{y}");
+}
+RSEOF
+if [ -n "$SYMBIN" ]; then
+  export BRAIN_SYMBOLS_BIN="$SYMBIN"
+  "$BIN" compress refs frobnicate "$SYMROOT" > "$WORK/sy1.out" 2>/dev/null
+  check "refs classifies def and call"        'grep -q "^def   lib.rs:1" "$WORK/sy1.out" && grep -q "^call  main.rs:3" "$WORK/sy1.out"'
+  check "refs header counts + artifact id"    'grep -q "defs=1 calls=1" "$WORK/sy1.out" && grep -q "id=bc_" "$WORK/sy1.out"'
+  check "refs --kind filters"                 '"$BIN" compress refs frobnicate "$SYMROOT" --kind call 2>/dev/null | grep -cq "^def " && exit 1 || true; "$BIN" compress refs frobnicate "$SYMROOT" --kind call 2>/dev/null | grep -q "^call "'
+  "$BIN" compress read "$SYMROOT/lib.rs" --symbols > "$WORK/sy2.out" 2>/dev/null
+  check "read --symbols is structural + marked" 'grep -q "tree-sitter parse — NOT AN EDIT SOURCE" "$WORK/sy2.out" && grep -q "function_item" "$WORK/sy2.out"'
+  check "symbols cap writes omission trailer" 'printf "\n[symbols]\nmax_results = 1\n" >> "$BRAIN_STATE_DIR/compress/compress.toml"; "$BIN" compress refs frobnicate "$SYMROOT" 2>/dev/null | grep -q "results omitted — recover"'
+else
+  echo "  skip (brain-symbols not built — structural checks skipped)"
+fi
+BRAIN_SYMBOLS_BIN=/nonexistent-symbols "$BIN" compress read "$SYMROOT/lib.rs" --symbols > "$WORK/sy3.out" 2>/dev/null
+check "symbols falls back lexically, marked"  'grep -q "lexical fallback" "$WORK/sy3.out"'
+BRAIN_SYMBOLS_BIN=/nonexistent-symbols "$BIN" compress refs frobnicate "$SYMROOT" > "$WORK/sy4.out" 2>/dev/null
+check "refs lexical fallback is marked ~"     'grep -q "LEXICAL FALLBACK" "$WORK/sy4.out" && grep -q "^~text" "$WORK/sy4.out"'
 
 echo "== statusline savings segment =="
 SL="$HERE/../../droplet/claude/statusline.sh"
