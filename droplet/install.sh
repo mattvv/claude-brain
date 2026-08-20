@@ -49,7 +49,7 @@ fi
 SYM_CRATE="$REPO_DIR/droplet/native/brain-symbols"
 SYM_VENDOR="$HOME/.local/share/brain/vendor/brain-symbols"
 if [ -f "$SYM_CRATE/Cargo.toml" ]; then
-  sym_version="$(sed -n 's/^version *= *"\(.*\)"//p' "$SYM_CRATE/Cargo.toml" | head -1)"
+  sym_version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$SYM_CRATE/Cargo.toml" | head -1)"
   for candidate in "$SYM_CRATE/target/release/brain-symbols" "$SYM_CRATE/target/debug/brain-symbols"; do
     if [ -x "$candidate" ] && [ ! -x "$SYM_VENDOR/$sym_version/brain-symbols" ]; then
       mkdir -p "$SYM_VENDOR/$sym_version"
