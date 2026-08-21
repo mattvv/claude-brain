@@ -21,10 +21,6 @@ jobs:
         run: |
           sudo apt-get install -y cloud-init
           cloud-init schema --config-file cloud-init.yaml
-      - name: usage-routing contract tests
-        run: |
-          sudo apt-get install -y jq
-          tests/usage/run.sh
       - name: patch checksum matches PIN
         run: |
           pinned=$(sed -n 's/^PATCH_SHA256=//p' host/proxy/PIN)
@@ -49,6 +45,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y jq original-awk
       - run: tests/platform/run.sh
       - run: tests/install/run.sh
+      - run: tests/usage/run.sh
 
   tests-macos:
     runs-on: macos-latest
@@ -61,6 +58,7 @@ jobs:
         run: /bin/bash --version | head -1
       - run: /bin/bash tests/platform/run.sh
       - run: /bin/bash tests/install/run.sh
+      - run: /bin/bash tests/usage/run.sh
       - name: installer plans on macOS
         run: /bin/bash install.sh --plan --here --scope workspace
 
@@ -73,6 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: tests/platform/run.sh
       - run: tests/install/run.sh
+      - run: tests/usage/run.sh
       - name: bootstrap maps Arch package names
         run: |
           out="$(bash host/bootstrap.sh --dry-run --profile local)"

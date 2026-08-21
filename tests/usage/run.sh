@@ -166,7 +166,12 @@ setting_set USAGE_ENFORCE block
 
 echo "== stale samples age out =="
 refresh flat-critical.json
-sed -i "s/updated_at=[0-9]*/updated_at=$(( $(date +%s) - BRAIN_USAGE_MAX_AGE - 60 ))/" "$BRAIN_USAGE_SUMMARY"
+# Not `sed -i`: BSD sed requires a backup suffix, so that form dies on macOS.
+age_sample() {
+  awk -v t="$1" '{sub(/updated_at=[0-9]+/, "updated_at=" t); print}' "$2" > "$WORK/aged" \
+    && mv "$WORK/aged" "$2"
+}
+age_sample "$(( $(date +%s) - BRAIN_USAGE_MAX_AGE - 60 ))" "$BRAIN_USAGE_SUMMARY"
 check "sample older than its window -> unknown" '[ "$(usage_state)" = "unknown" ]'
 check "stale sample -> allowed"                 '[ "$(gate Explore)" = "allow" ]'
 
