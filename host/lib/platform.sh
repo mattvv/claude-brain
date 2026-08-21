@@ -138,6 +138,83 @@ run_timeout() {
   wait "$pid"
 }
 
+# run_detached CMD... — start something that must outlive this shell and never
+# report back. setsid is Linux-only; on macOS a subshell + nohup does the job.
+run_detached() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >/dev/null 2>&1 &
+  else
+    ( nohup "$@" >/dev/null 2>&1 & ) &
+  fi
+  return 0
+}
+
+# with_lock FILE CMD... — run CMD holding an exclusive lock, or return 0 without
+# running it if someone else already holds one. flock(1) is not on macOS, so the
+# fallback is an atomic mkdir with a staleness cutoff (a crashed holder must not
+# wedge the lock forever).
+with_lock() {
+  local lockfile="$1"; shift
+  if command -v flock >/dev/null 2>&1; then
+    ( flock -n 9 || exit 0; "$@" ) 9>"$lockfile"
+    return 0
+  fi
+  local dir="$lockfile.d"
+  if ! mkdir "$dir" 2>/dev/null; then
+    local age
+    age=$(( $(date +%s) - $(file_mtime "$dir") ))
+    [ "$age" -gt 300 ] || return 0
+    rmdir "$dir" 2>/dev/null || true
+    mkdir "$dir" 2>/dev/null || return 0
+  fi
+  "$@"
+  rmdir "$dir" 2>/dev/null || true
+  return 0
+}
+
+# ------------------------------------------------------------------ time
+
+# iso_to_epoch ISO8601 — seconds since the epoch, printing 0 when unparseable
+# so callers can use the result directly. GNU date -d swallows anything; BSD
+# date needs an exact format, so the zone suffix is removed first (it carries
+# the offset) and only then the fractional seconds — doing it the other way
+# round eats the offset and leaves `%[+-]*` to chew into the date itself.
+# Covers "...Z", "...+00:00" and "...+0000", each with or without a fraction.
+iso_to_epoch() {
+  local s="$1" base sign hh mm off=0 secs
+  [ -n "$s" ] || { printf '0\n'; return 0; }
+  if secs="$(date -d "$s" +%s 2>/dev/null)"; then
+    printf '%s\n' "$secs"
+    return 0
+  fi
+  base="$s"
+  case "$base" in
+    *Z|*z)
+      base="${base%?}"
+      ;;
+    *[+-][0-9][0-9]:[0-9][0-9])
+      sign="${base: -6:1}"; hh="${base: -5:2}"; mm="${base: -2:2}"
+      off=$(( 10#$hh * 3600 + 10#$mm * 60 ))
+      [ "$sign" = "-" ] && off=$(( -off ))
+      base="${base%??????}"
+      ;;
+    *[+-][0-9][0-9][0-9][0-9])
+      sign="${base: -5:1}"; hh="${base: -4:2}"; mm="${base: -2:2}"
+      off=$(( 10#$hh * 3600 + 10#$mm * 60 ))
+      [ "$sign" = "-" ] && off=$(( -off ))
+      base="${base%?????}"
+      ;;
+  esac
+  base="${base%%.*}"
+  secs="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || { printf '0\n'; return 0; }
+  printf '%s\n' "$(( secs - off ))"
+}
+
+# epoch_to_hm EPOCH — local wall-clock HH:MM for a timestamp.
+epoch_to_hm() {
+  date -d "@$1" '+%H:%M' 2>/dev/null || date -r "$1" '+%H:%M' 2>/dev/null || printf '%s\n' "$1"
+}
+
 # True when PORT is bound on something other than loopback — the security
 # assertion behind `brain status`. Unknown (no tool) is reported as "not public"
 # but the caller is told the check was skipped via a non-zero second return.

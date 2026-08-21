@@ -29,3 +29,7 @@ Rules:
 - If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,
   then resume that SAME agent with the answers (its gathered context is intact) rather
   than spawning a fresh one.
+- Routing preference is subject to live subscription headroom: `brain usage` shows what is
+  left. As Claude headroom falls, push implementation and bulk reading through a consultant
+  instead of doing it in-session; at the reserve, Anthropic-backed subagents are blocked and
+  `brain-*` consultants are the way out (see the usage-policy block).

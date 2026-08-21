@@ -16,6 +16,7 @@
 #   brain setup      first-time onboarding wizard (resumable)
 #   brain config     settings: consult foreground|background (watch brain-*
 #                    consultants work live, or run them in the background)
+#   brain usage      subscription headroom + who can take work right now
 #   brain consult    live consultation progress: status | log | watch
 #   brain update     pull latest claude-brain + rebuild what changed
 #   brain uninstall  remove claude-brain and restore your Claude Code config
@@ -72,6 +73,7 @@ remove_block() {
 install_routing() {
   install_block "$1" routing
   install_ops_block
+  install_block "$BRAIN_REPO_DIR/host/claude/usage-policy.md" usage
   install_consult_block
 }
 
@@ -317,6 +319,15 @@ cmd_status() {
   done
   [ "$found" -eq 1 ] || warn "none yet — run: brain auth chatgpt|grok|kimi"
 
+  local u_state
+  u_state="$(usage_state 2>/dev/null || echo unknown)"
+  case "$u_state" in
+    ok)       ok   "claude headroom $(usage_field headroom)% — routing unconstrained" ;;
+    tight)    warn "claude headroom $(usage_field headroom)% on $(usage_field bind) — prefer consultants (brain usage)" ;;
+    critical) fail "claude headroom $(usage_field headroom)% — at the $(usage_reserve_pct)% reserve; Anthropic-backed subagents blocked (brain usage)" ;;
+    *)        warn "claude headroom unknown${C_RESET} — usage guards fail open (brain usage)" ;;
+  esac
+
   printf '%s\n' "${C_BOLD}claude & github${C_RESET}"
   if claude_bin >/dev/null; then
     ok "claude installed: $("$(claude_bin)" --version 2>/dev/null | head -1)"
@@ -371,24 +382,7 @@ vendor_login_flags() {
   esac
 }
 
-vendor_record_prefix() {
-  case "$1" in
-    chatgpt) echo codex ;;
-    grok)    echo xai ;;
-    kimi)    echo kimi ;;
-    claude)  echo claude ;;
-    *)       return 1 ;;
-  esac
-}
-
-vendor_linked() {
-  local prefix f
-  prefix="$(vendor_record_prefix "$1")" || return 1
-  for f in "$BRAIN_AUTH_DIR/$prefix"-*.json; do
-    [ -e "$f" ] && return 0
-  done
-  return 1
-}
+# vendor_record_prefix / vendor_linked live in lib/common.sh (shared with the hooks).
 
 cmd_auth_start() {
   local vendor="$1" flags log
@@ -539,6 +533,21 @@ cmd_auth() {
   # OAuth tools may write loose perms; re-tighten.
   chmod 700 "$BRAIN_AUTH_DIR" 2>/dev/null || true
   chmod 600 "$BRAIN_AUTH_DIR"/*.json 2>/dev/null || true
+}
+
+# Existing installs never re-render proxy-config.yaml (render_proxy_config runs
+# only from cmd_setup, and only when the file is absent), so new top-level keys
+# have to be migrated in explicitly. Idempotent, and never touches host/port/
+# auth-dir/api-keys — a bad edit there takes the router down.
+migrate_proxy_config() {
+  [ -f "$BRAIN_PROXY_CONFIG" ] || return 0
+  local changed=0
+  if ! grep -q '^save-cooldown-status:' "$BRAIN_PROXY_CONFIG"; then
+    printf '%s\n' 'save-cooldown-status: true' >> "$BRAIN_PROXY_CONFIG"
+    changed=1
+  fi
+  [ "$changed" -eq 1 ] && info "proxy config: enabled per-vendor cooldown records"
+  return 0
 }
 
 # -------------------------------------------------------------------- setup
@@ -905,6 +914,123 @@ cmd_recall() {
 
 # ------------------------------------------------------------------- config
 # Live consultation progress. Shared by the progress hook, the statusline, and
+
+# ------------------------------------------------------------------- usage
+# Subscription headroom. Only Anthropic reports a real number; the proxy
+# vendors have no reachable usage endpoint, so they are shown as linked/unknown
+# rather than given a number we cannot measure.
+cmd_usage() {
+  case "${1:-}" in
+    --refresh)
+      need jq curl
+      usage_refresh
+      return 0
+      ;;
+    override)
+      local mins="${2:-30}"
+      case "$mins" in ''|*[!0-9]*) die "usage: brain usage override <minutes>" ;; esac
+      mkdir -p "$BRAIN_USAGE_DIR"
+      printf '%s\n' "$(( $(date +%s) + mins * 60 ))" > "$BRAIN_USAGE_OVERRIDE_FILE"
+      ok "usage block lifted for ${mins}m (delete $BRAIN_USAGE_OVERRIDE_FILE to end early)"
+      return 0
+      ;;
+    --json)
+      usage_ensure_fresh
+      local st; st="$(usage_state)"
+      jq -nc \
+        --arg state "$st" \
+        --arg enforce "$(usage_enforce)" \
+        --arg bind "$(usage_field bind 2>/dev/null || echo '')" \
+        --arg lanes "$(usage_rank_lanes 2>/dev/null || echo '')" \
+        --arg err "$(usage_last_error)" \
+        --argjson headroom "$(usage_field headroom 2>/dev/null || echo null)" \
+        --arg windows "$(usage_field windows 2>/dev/null || echo '')" \
+        --argjson resets_in "$(usage_field resets_in 2>/dev/null || echo null)" \
+        --argjson updated_at "$(usage_field updated_at 2>/dev/null || echo null)" \
+        --argjson reserve "$(usage_reserve_pct)" \
+        --argjson advisory "$(usage_advisory_pct)" \
+        --argjson override "$(usage_override_active && echo true || echo false)" \
+        --arg cx_state "$(usage_codex_state)" \
+        --arg cx_plan "$(usage_codex_field plan 2>/dev/null || echo '')" \
+        --argjson cx_headroom "$(usage_codex_field headroom 2>/dev/null || echo null)" \
+        --argjson cx_primary "$(usage_codex_field primary 2>/dev/null || echo null)" \
+        --argjson cx_secondary "$(usage_codex_field secondary 2>/dev/null || echo null)" \
+        '{state:$state, enforce:$enforce, override_active:$override,
+          thresholds:{reserve:$reserve, advisory:$advisory},
+          anthropic:{headroom:$headroom, binding_window:$bind,
+                     windows:($windows | if . == "" then {} else
+                               (split(",") | map(split(":")) | map({key:.[0], value:(.[1]|tonumber)}) | from_entries) end),
+                     resets_in:$resets_in, updated_at:$updated_at, error:$err},
+          chatgpt:{state:$cx_state, headroom:$cx_headroom, plan:$cx_plan,
+                   primary_used:$cx_primary, secondary_used:$cx_secondary},
+          consultant_lanes:($lanes | if . == "" then [] else split(",") end)}'
+      return 0
+      ;;
+    ''|--help|-h) ;;
+    *) die "usage: brain usage [--json|--refresh|override <minutes>]" ;;
+  esac
+
+  need jq
+  usage_ensure_fresh
+  # First run has nothing cached and the background spawn has not landed yet.
+  [ -f "$BRAIN_USAGE_SUMMARY" ] || usage_refresh
+
+  local st err
+  st="$(usage_state)"
+  printf '%s\n' "${C_BOLD}claude subscription${C_RESET}"
+  if [ "$st" = "unknown" ]; then
+    err="$(usage_last_error)"
+    warn "headroom unknown${err:+ ($err)} — routing is unaffected; usage guards fail open"
+  else
+    local bind entry w v
+    bind="$(usage_field bind 2>/dev/null || true)"
+    for entry in $(usage_field windows 2>/dev/null | tr ',' ' '); do
+      w="${entry%%:*}"; v="${entry##*:}"
+      printf '  %-22s %3s%% used%s\n' "$w" "$v" \
+        "$([ "$w" = "$bind" ] && printf ' %s' "${C_BOLD}← binding${C_RESET}")"
+    done
+    local msg reset_h
+    reset_h="$(usage_reset_human 2>/dev/null || echo '?')"
+    msg="headroom $(usage_field headroom)% · resets in $reset_h"
+    case "$st" in
+      ok)       ok       "$msg" ;;
+      tight)    warn     "$msg — prefer consultants for heavy work" ;;
+      critical) fail     "$msg — at or below the ${C_BOLD}$(usage_reserve_pct)%${C_RESET} reserve; Anthropic-backed subagents are blocked" ;;
+    esac
+  fi
+
+  printf '\n%s\n' "${C_BOLD}consultant vendors${C_RESET}"
+  local v until cx cs
+  for v in $BRAIN_CONSULT_VENDORS; do
+    if ! vendor_linked "$v"; then
+      printf '  %-10s %s\n' "$v" "not linked — brain auth $v"
+      continue
+    fi
+    if until="$(vendor_cooldown "$v" | awk '{print $2}')" && [ -n "$until" ]; then
+      printf '  %-10s %s\n' "$v" "in cooldown until $(epoch_to_hm "$until")"
+      continue
+    fi
+    if [ "$v" = "chatgpt" ] && cx="$(usage_codex_field headroom 2>/dev/null)"; then
+      cs="$(usage_codex_state)"
+      printf '  %-10s headroom %s%% (weekly %s%% used, secondary %s%%) · plan %s%s\n' \
+        "$v" "$cx" "$(usage_codex_field primary)" "$(usage_codex_field secondary)" \
+        "$(usage_codex_field plan)" \
+        "$([ "$cs" = "critical" ] && printf ' %s' "${C_BOLD}← at reserve${C_RESET}")"
+    elif [ "$v" = "chatgpt" ] && ! usage_probe_enabled; then
+      printf '  %-10s %s\n' "$v" "linked · headroom unread (probe off)"
+    else
+      printf '  %-10s %s\n' "$v" "linked · headroom not measurable (no usage endpoint)"
+    fi
+  done
+
+  printf '\n%s\n' "${C_BOLD}policy${C_RESET}"
+  printf '  enforce=%s  reserve=%s%%  advisory-at=%s%%  ttl=%ss  probe=%s (max every %ss, ~21 tok)\n' \
+    "$(usage_enforce)" "$(usage_reserve_pct)" "$(usage_advisory_pct)" "$(usage_ttl)" \
+    "$(setting_get USAGE_PROBE on)" "$(usage_probe_ttl)"
+  usage_override_active && warn "override active — the reserve block is lifted"
+  printf '  change with: brain config usage <advisory|block|off> | reserve <pct>\n'
+}
+
 # anyone tailing by hand, so all three report identical state.
 cmd_consult() {
   local think
@@ -937,7 +1063,7 @@ cmd_consult() {
 }
 
 cmd_config() {
-  local key="${1:-}" val="${2:-}"
+  local key="${1:-}" val="${2:-}" val2="${3:-}"
   case "$key" in
     '')
       printf '%s\n' "${C_BOLD}brain settings${C_RESET}"
@@ -946,6 +1072,57 @@ cmd_config() {
       printf '  profile    = %s   (set at install time)\n' "$(setting_get PROFILE "$(default_profile)")"
       printf '  scope      = %s   (brain config scope <machine|workspace>)\n' "$(setting_get SCOPE machine)"
       printf '  workspace  = %s\n' "$(workspace_dir)"
+      printf '  usage      = %s   reserve %s%%  advisory-at %s%%  ttl %ss  probe %s\n' \
+        "$(usage_enforce)" "$(usage_reserve_pct)" "$(usage_advisory_pct)" "$(usage_ttl)" \
+        "$(setting_get USAGE_PROBE on)"
+      printf '               (brain config usage <advisory|block|off> | reserve <pct>\n'
+      printf '                | advisory-at <pct> | ttl <secs> | probe <on|off>)\n'
+      ;;
+    usage)
+      case "$val" in
+        '')
+          printf '%s\n' "$(usage_enforce)"
+          ;;
+        advisory|block|off)
+          setting_set USAGE_ENFORCE "$val"
+          case "$val" in
+            block)    ok "Anthropic-backed subagents are blocked below the $(usage_reserve_pct)% reserve" ;;
+            advisory) ok "low headroom is surfaced to the brain, but nothing is blocked" ;;
+            off)      ok "usage-aware routing disabled (no polling, no advice, no blocks)" ;;
+          esac
+          ;;
+        probe)
+          case "$val2" in
+            '')     printf '%s\n' "$(setting_get USAGE_PROBE on)" ;;
+            on)     setting_set USAGE_PROBE on
+                    ok "ChatGPT headroom will be read (~21 tokens per probe)" ;;
+            off)    setting_set USAGE_PROBE off
+                    ok "ChatGPT headroom will not be read (no tokens spent)" ;;
+            *)      die "usage: brain config usage probe <on|off>" ;;
+          esac
+          ;;
+        probe-ttl)
+          case "$val2" in ''|*[!0-9]*) die "usage: brain config usage probe-ttl <seconds>" ;; esac
+          setting_set USAGE_PROBE_TTL "$val2"
+          ok "ChatGPT headroom probed at most every $(usage_probe_ttl)s"
+          ;;
+        reserve|advisory-at|ttl)
+          case "$val2" in ''|*[!0-9]*) die "usage: brain config usage $val <number>" ;; esac
+          case "$val" in
+            reserve)
+              [ "$val2" -le 90 ] || die "reserve must be 0-90 (a huge reserve blocks everything)"
+              setting_set USAGE_RESERVE_PCT "$val2"
+              [ "$val2" -eq 0 ] && ok "reserve disabled — nothing will be blocked on usage" \
+                                || ok "keeping $val2% of the Claude subscription in reserve"
+              ;;
+            advisory-at) setting_set USAGE_ADVISORY_PCT "$val2"; ok "advisory below $val2% headroom" ;;
+            ttl)         setting_set USAGE_TTL "$val2";          ok "usage cache TTL now $(usage_ttl)s" ;;
+          esac
+          ;;
+        *)
+          die "usage: brain config usage [advisory|block|off|reserve <pct>|advisory-at <pct>|ttl <secs>|probe <on|off>|probe-ttl <secs>]"
+          ;;
+      esac
       ;;
     statusline)
       command -v jq >/dev/null 2>&1 || die "jq is required to change the statusline"
@@ -998,7 +1175,7 @@ cmd_config() {
       esac
       ;;
     *)
-      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>]"
+      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>|usage ...]"
       ;;
   esac
 }
@@ -1011,6 +1188,7 @@ cmd_update() {
   "$SCRIPT_DIR/brain-proxy-build"   # no-op unless PIN changed
   if claude_bin >/dev/null; then "$(claude_bin)" update || true; fi
   if [ -f "$BRAIN_PROXY_CONFIG" ]; then
+    migrate_proxy_config
     svc_install proxy
     svc_restart proxy
   fi
@@ -1096,9 +1274,10 @@ case "${1:-rc}" in
   compress)  shift; cmd_compress "$@" ;;
   explore)   shift; cmd_explore "$@" ;;
   recall)    shift; cmd_recall "$@" ;;
+  usage)     shift; cmd_usage "$@" ;;
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
-  help|-h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac

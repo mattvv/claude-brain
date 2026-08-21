@@ -15,11 +15,16 @@ jobs:
           shellcheck -x -S warning install.sh setup.sh host/install.sh host/bootstrap.sh \
             host/bin/brain host/bin/brain-ask host/bin/brain-proxy-build host/lib/common.sh \
             host/lib/platform.sh host/provision/digitalocean.sh host/claude/statusline.sh \
-            host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh
+            host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh \
+            tests/usage/run.sh
       - name: cloud-init schema
         run: |
           sudo apt-get install -y cloud-init
           cloud-init schema --config-file cloud-init.yaml
+      - name: usage-routing contract tests
+        run: |
+          sudo apt-get install -y jq
+          tests/usage/run.sh
       - name: patch checksum matches PIN
         run: |
           pinned=$(sed -n 's/^PATCH_SHA256=//p' host/proxy/PIN)
