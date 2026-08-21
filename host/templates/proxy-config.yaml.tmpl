@@ -5,5 +5,10 @@ api-keys:
   - "__TOKEN__"
 debug: false
 transient-error-cooldown-seconds: -1
+# Persist per-auth quota/cooldown state as .cds files beside the credentials.
+# This is the only free signal we get that a proxy vendor has hit its own quota:
+# those vendors expose no usage endpoint, so without it a 429'd vendor still looks
+# available to usage-aware routing. Read by vendor_cooldown() in lib/common.sh.
+save-cooldown-status: true
 claude-code:
   disable-cloaking-model-list: true

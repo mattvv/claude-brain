@@ -15,7 +15,8 @@ jobs:
           shellcheck -x -S warning install.sh setup.sh host/install.sh host/bootstrap.sh \
             host/bin/brain host/bin/brain-ask host/bin/brain-proxy-build host/lib/common.sh \
             host/lib/platform.sh host/provision/digitalocean.sh host/claude/statusline.sh \
-            host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh
+            host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh \
+            tests/usage/run.sh
       - name: cloud-init schema
         run: |
           sudo apt-get install -y cloud-init
@@ -44,6 +45,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y jq original-awk
       - run: tests/platform/run.sh
       - run: tests/install/run.sh
+      - run: tests/usage/run.sh
 
   tests-macos:
     runs-on: macos-latest
@@ -56,6 +58,7 @@ jobs:
         run: /bin/bash --version | head -1
       - run: /bin/bash tests/platform/run.sh
       - run: /bin/bash tests/install/run.sh
+      - run: /bin/bash tests/usage/run.sh
       - name: installer plans on macOS
         run: /bin/bash install.sh --plan --here --scope workspace
 
@@ -68,6 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: tests/platform/run.sh
       - run: tests/install/run.sh
+      - run: tests/usage/run.sh
       - name: bootstrap maps Arch package names
         run: |
           out="$(bash host/bootstrap.sh --dry-run --profile local)"

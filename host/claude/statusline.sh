@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # claude-brain statusline: model · dir, plus live consultation activity when a
 # brain-ask --stream log is actively being written (see host/bin/brain-ask),
-# plus lifetime estimated token savings from the compression ledger.
+# plus lifetime estimated token savings from the compression ledger, plus
+# subscription headroom while it is low enough to matter.
 set -uo pipefail
 
 input="$(cat)"
@@ -69,6 +70,36 @@ if [ -r "$summary" ]; then
       tok_h="$est_tokens"
     fi
     line="$line │ 💾 ~${tok_h} tok est"
+  fi
+fi
+
+# Subscription headroom segment. Written atomically by usage_refresh_anthropic
+# (droplet/lib/common.sh). Read-only and awk-only on purpose: the statusline runs
+# at refreshInterval=2, so this must never fetch, and never spawn jq or curl.
+# Shown only when it is actionable — silent at healthy headroom, and silent when
+# the sample is missing, unparseable, or older than the window it describes.
+usage_summary="$state/usage/summary.txt"
+if [ -r "$usage_summary" ]; then
+  # -1 when the key is absent: a truncated summary must read as "no data", not
+  # as 0% headroom, which would falsely announce an exhausted subscription.
+  read -r headroom u_updated < <(
+    awk 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"=");v[kv[1]]=kv[2]}
+         print (("headroom" in v) ? v["headroom"]+0 : -1),
+               (("updated_at" in v) ? v["updated_at"]+0 : -1)}' "$usage_summary" 2>/dev/null
+  ) || true
+  settings="${BRAIN_CONFIG_DIR:-$HOME/.config/brain}/settings"
+  reserve="$(sed -n 's/^USAGE_RESERVE_PCT=//p' "$settings" 2>/dev/null | tail -1)"
+  advisory="$(sed -n 's/^USAGE_ADVISORY_PCT=//p' "$settings" 2>/dev/null | tail -1)"
+  reserve="${reserve:-15}"; advisory="${advisory:-35}"
+  now="$(date +%s)"
+  age=$((now - ${u_updated:-0}))
+  if [ "${u_updated:-0}" -gt 0 ] && [ "$age" -ge -300 ] && [ "$age" -le 18000 ] \
+     && [ "${headroom:--1}" -ge 0 ] && [ "$headroom" -le "$advisory" ]; then
+    if [ "$headroom" -le "$reserve" ]; then
+      line="$line │ 🪫 ${headroom}% claude — reserve"
+    else
+      line="$line │ ⚡ ${headroom}% claude"
+    fi
   fi
 fi
 

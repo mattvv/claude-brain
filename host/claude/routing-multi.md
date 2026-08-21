@@ -26,3 +26,7 @@ Rules:
 - Match effort to difficulty by choosing the lane, not by inflating the task: trivial
   work goes to `brain-luna`, not to `brain-sol` with a bigger prompt.
 - Review by a different family than the author when the stakes are high.
+- Routing preference is subject to live subscription headroom: `brain usage` shows what is
+  left. As Claude headroom falls, push implementation and bulk reading through a consultant
+  instead of doing it in-session; at the reserve, Anthropic-backed subagents are blocked and
+  `brain-*` consultants are the way out (see the usage-policy block).

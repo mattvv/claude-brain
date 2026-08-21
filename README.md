@@ -140,6 +140,7 @@ Tailscale is also the easiest way to reach a brain at home from a coffee shop.
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
 | `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
+| `brain usage` | See how much of each subscription is left, and who can still take work (`override <min>` to spend the reserve anyway) |
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
 | `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
 | `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
@@ -152,6 +153,66 @@ to run them for you.
 models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi
 with full tool access, parable-style. The trade-off: phone control (Remote Control) is
 technically impossible in that mode, so you use it at a terminal.
+
+## Spreading the load (usage-aware routing)
+
+You are paying for several subscriptions. They have separate limits, and spending one does
+not spend the others — so when your Claude window runs low, the brain should move work onto
+a model that still has room instead of grinding to a halt.
+
+`brain usage` shows where you stand:
+
+```
+claude subscription
+  session                 17% used
+  weekly_all              37% used
+  weekly_scoped_fable     66% used ← binding
+ ! headroom 34% · resets in 132h 22m — prefer consultants for heavy work
+
+consultant vendors
+  chatgpt    headroom 98% (weekly 2% used, secondary 0%) · plan prolite
+  grok       linked · headroom not measurable (no usage endpoint)
+  kimi       not linked — brain auth kimi
+```
+
+What the brain does with that, automatically:
+
+- **Plenty left** — nothing changes.
+- **Running low** (below 35% headroom by default) — the brain is told the live number at the
+  moment it picks where to send work, and steers implementation, review, and bulk reading
+  through a `brain-*` consultant instead of doing it in-session.
+- **At the reserve** (below 15% by default) — dispatching an *Anthropic-backed* subagent is
+  blocked outright. Your session keeps working: the reserve exists precisely so it can. The
+  `brain-*` consultants are never blocked, so there is always a way forward.
+
+```
+brain config usage block|advisory|off    # how firm the guard is (default: block)
+brain config usage reserve 15            # how much Claude quota to keep back
+brain config usage probe off             # stop reading ChatGPT headroom (see below)
+brain usage override 30                  # spend the reserve anyway, for 30 minutes
+```
+
+**What is and isn't measured.**
+
+- **Anthropic** publishes per-window utilisation on a free endpoint. This is the number the
+  reserve protects.
+- **ChatGPT** reports usage too, but only as `x-codex-*` headers riding along on a real
+  request — there is no endpoint that just tells you. So `brain usage` sends one minimal
+  turn (**~21 tokens**, at most every 15 minutes) and keeps the headers. If you would rather
+  not spend anything at all: `brain config usage probe off`, and ChatGPT goes back to being
+  reported as unread rather than guessed at.
+- **Grok and Kimi** expose nothing reachable, and are reported as *linked, headroom not
+  measurable* — never a number we cannot actually see.
+
+Every vendor also has a free negative signal: the router records when one has hit its own
+quota, and a vendor in cooldown drops out of the rotation until it recovers. A consultant
+vendor that is itself at the reserve stops being offered as a destination — the point is to
+spread load across subscriptions, not to move a wall from one to another.
+
+Every part of this fails open. An expired token, a changed endpoint, no network, or a
+payload we do not recognise all mean "unknown", and unknown never blocks anything. Nor does
+the guard ever block when no consultant is linked — there would be nowhere for the work to
+go.
 
 ## Saving tokens (the compression engine)
 

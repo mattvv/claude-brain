@@ -134,6 +134,50 @@ The proxy itself is dumb fan-out; task→model routing lives a layer up (parable
   next fallback", instead of a raw HTTP error mid-task. Registered idempotently in
   `~/.claude/settings.json` by `host/install.sh`.
 
+## Usage-aware routing
+
+The four subscriptions have independent limits, and nothing in the stack used to know how
+much of any of them was left. `host/lib/common.sh` now carries a small poller and a
+decision function shared by the CLI, the hooks, and the statusline:
+
+- **Signal — Anthropic.** `GET https://api.anthropic.com/api/oauth/usage`, bearer taken from
+  `~/.claude/.credentials.json`, returns per-window utilisation. The current payload's
+  `limits[]` array is preferred over the flat `five_hour`/`seven_day`/`seven_day_opus` keys
+  because it includes model-scoped weekly windows that the flat keys report as `null` —
+  missing it silently understates real usage. Free.
+- **Signal — ChatGPT/Codex.** Usage arrives only as `x-codex-primary-used-percent` and
+  friends on a response to `POST /backend-api/codex/responses`. There is no GET that carries
+  them: `/codex/models` 400s, and `/codex/usage` and `/codex/rate_limits` sit behind a
+  Cloudflare managed challenge. Our router does capture the headers internally
+  (`usage.Record.ResponseHeaders`) but forwards only `Content-Type`, CORS and `X-CPA-*` to
+  loopback clients, so `brain-ask` cannot see them either. `usage_refresh_codex` therefore
+  sends one minimal turn directly (~21 tokens: 16 in, 5 out) on its own longer TTL, with
+  `USAGE_PROBE=off` to disable. A rejected model 400s *before* the rate-limit middleware and
+  returns no headers, so the turn has to be real; the request must also carry
+  `Originator: codex-tui` and the pinned codex UA or Cloudflare challenges it.
+- **Signal — Grok/Kimi.** Nothing reachable; unknown-but-available.
+- **Free negative signal, all proxy vendors.** `save-cooldown-status: true` gives a
+  "this vendor 429'd until T" record (`.cds` files beside the credentials).
+- **Refresh is bash + curl, not the Rust crate.** `brain-compress` builds reqwest with no TLS
+  feature on purpose (loopback proxy only); adding rustls to reach `api.anthropic.com` would
+  be a poor trade for ~40 lines of shell. The token is passed to curl on stdin, never argv.
+- **Read is separate from refresh.** The statusline runs at `refreshInterval: 2`, so reads are
+  awk over one `summary.txt`. `usage_ensure_fresh` never blocks: past the TTL it spawns a
+  detached refresh and the caller decides on the sample it already has. Bands are derived at
+  read time from current thresholds, so `brain config usage reserve` takes effect immediately.
+- **Enforcement point.** `model-guard.sh` (PreToolUse `Agent|Task`) is the only one, which is
+  what makes a hard block safe: the main thread has no PreToolUse event, so a deny there is
+  structurally incapable of ending the session. At the reserve it denies *Anthropic-backed*
+  subagents (`Explore`, `Plan`, `general-purpose`, `brain-fable`) and names a consultant
+  instead. `brain-*` consultants are never usage-blocked — they are the escape hatch.
+- **Three safety valves,** each downgrading a deny to advice: unknown/stale state, no linked
+  consultant to fall back to, and an explicit override (`brain usage override`,
+  `BRAIN_USAGE_OVERRIDE=1`, or `brain config usage advisory|off`).
+- **Advice is rate-limited** to band transitions plus a ten-minute floor. It lands in the
+  model's context; an unlimited version would burn the quota it protects.
+
+Contract tests: `tests/usage/run.sh` (offline, fixture-driven, no creds), wired into CI.
+
 ## Self-service operations
 
 The brain administers its own machine. `host/claude/brain-ops.md` is installed into

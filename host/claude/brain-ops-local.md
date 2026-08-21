@@ -83,6 +83,17 @@ verbose output while keeping the exact original recoverable.
   single hyped number). Turn it all off with `brain compress off`. Nothing is ever
   silently dropped.
 
+**Watch the subscription budget**: `brain usage` shows how much of the Claude subscription
+is left (per window, which one is binding, when it resets) and which consultant vendors can
+take work. Anthropic and ChatGPT report real numbers (ChatGPT's costs one ~21-token probe,
+disable with `brain config usage probe off`); Grok and Kimi have no usage endpoint, so never
+quote a headroom figure for them. As Claude headroom falls, route implementation and bulk
+reading through `brain-*` consultants instead of doing it in-session; at the reserve the
+guard hook blocks Anthropic-backed subagents so the session keeps enough quota to answer.
+If the user asks to spend the reserve anyway, `brain usage override <minutes>` lifts the
+block, and `brain config usage <advisory|block|off>` / `reserve <pct>` changes the policy
+for good.
+
 **Never** print or copy the contents of `~/.config/brain/token`,
 `~/.config/brain/proxy-config.yaml`, or anything in `~/.cli-proxy-api/` — they are live
 credentials for the user's own accounts. Never open firewall ports or change firewall
