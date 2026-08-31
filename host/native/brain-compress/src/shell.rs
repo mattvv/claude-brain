@@ -24,14 +24,26 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// The set of RTK pipe filters we trust to compress real command output. Only
-/// filters verified to genuinely shrink text (not RTK subcommands that re-run
-/// the command with different flags) are listed. Keep this in sync with the
-/// hook's rewrite decision — both call `filter_for`.
+/// Filter name meaning "not an RTK filter — compact this natively as a file
+/// read". RTK has no filter for file contents (its generic `log` filter turns a
+/// source file into an error summary), so `cat`/`head`/`tail`/`sed -n` are
+/// handled by `file_read_view` instead.
+pub const FILE_READ: &str = "file-read";
+
+/// The set of filters we trust to compress real command output. RTK filters are
+/// named as RTK knows them; `FILE_READ` is handled natively. Only filters
+/// verified to genuinely shrink text (not RTK subcommands that re-run the
+/// command with different flags) are listed. Keep this in sync with the hook's
+/// rewrite decision — both call `filter_for`.
 pub fn filter_for(argv: &[String]) -> Option<&'static str> {
     let first = argv.first().map(String::as_str)?;
     let second = argv.get(1).map(String::as_str);
+    let rest = argv.get(1..).unwrap_or(&[]);
     match (first, second) {
+        // A `git log -40` has already been bounded by the caller: cutting it to
+        // four entries drops 36 commits that were explicitly asked for, and the
+        // recovery costs more than the compaction saved.
+        ("git", Some("log")) if git_log_is_bounded(rest) => None,
         ("git", Some("log")) => Some("git-log"),
         ("git", Some("diff")) => Some("git-diff"),
         ("git", Some("show")) => Some("git-diff"),
@@ -39,13 +51,166 @@ pub fn filter_for(argv: &[String]) -> Option<&'static str> {
         ("pytest", _) => Some("pytest"),
         ("py.test", _) => Some("pytest"),
         ("go", Some("test")) => Some("go-test"),
+        ("go", Some("build")) => Some("go-build"),
         ("grep", _) => Some("grep"),
         ("rg", _) => Some("grep"),
         ("find", _) => Some("find"),
+        ("fd", _) => Some("fd"),
         ("vitest", _) => Some("vitest"),
         ("tsc", _) => Some("tsc"),
+        ("mypy", _) => Some("mypy"),
+        ("ruff", Some("check")) => Some("ruff-check"),
+        ("ruff", Some("format")) => Some("ruff-format"),
+        ("prettier", _) => Some("prettier"),
+        ("phpstan", _) => Some("phpstan"),
+        ("phpunit", _) => Some("phpunit"),
+        // File reads: the biggest surface by bytes in real traffic, and the one
+        // RTK cannot help with.
+        ("cat", _) | ("head", _) | ("tail", _) if reads_named_files(first, rest) => Some(FILE_READ),
+        ("sed", _) if sed_is_print_only(rest) && reads_named_files(first, rest) => Some(FILE_READ),
         _ => None,
     }
+}
+
+/// Largest explicit `git log` count we still treat as "the caller said how much
+/// they wanted". Above this they are asking for history in bulk and a compacted
+/// view is the useful answer.
+const GIT_LOG_BOUNDED_MAX: u32 = 200;
+
+/// Whether `git log` was given an explicit, modest commit count: `-40`, `-n 40`,
+/// `-n40`, `--max-count=40`, `--max-count 40`.
+fn git_log_is_bounded(rest: &[String]) -> bool {
+    let mut expect_count = false;
+    for arg in rest {
+        if expect_count {
+            return arg.parse::<u32>().map(|n| n <= GIT_LOG_BOUNDED_MAX).unwrap_or(false);
+        }
+        if let Some(value) = arg.strip_prefix("--max-count") {
+            match value.strip_prefix('=') {
+                Some(number) => {
+                    return number.parse::<u32>().map(|n| n <= GIT_LOG_BOUNDED_MAX).unwrap_or(false)
+                }
+                None => {
+                    expect_count = true;
+                    continue;
+                }
+            }
+        }
+        if arg == "-n" {
+            expect_count = true;
+            continue;
+        }
+        if let Some(number) = arg.strip_prefix("-n") {
+            if let Ok(n) = number.parse::<u32>() {
+                return n <= GIT_LOG_BOUNDED_MAX;
+            }
+        }
+        if let Some(number) = arg.strip_prefix('-') {
+            if let Ok(n) = number.parse::<u32>() {
+                return n <= GIT_LOG_BOUNDED_MAX;
+            }
+        }
+    }
+    false
+}
+
+/// True when the command names at least one file to read and carries no flag
+/// that would make the wrapper hang or change what "output" means.
+///
+/// Without a named file these tools read stdin, which the wrapper closes — so a
+/// rewrite would silently turn real output into nothing.
+fn reads_named_files(tool: &str, rest: &[String]) -> bool {
+    // Which short flags consume the following argument, per tool. `cat` has
+    // none — `cat -n` numbers lines, it does not take a value.
+    let value_flags: &[char] = match tool {
+        "head" | "tail" => &['n', 'c'],
+        // `-i` never reaches here: sed_is_print_only rejects it first.
+        "sed" => &['e', 'f', 'l'],
+        _ => &[],
+    };
+    // `sed`'s first non-flag argument is the script, not a file — unless the
+    // script was supplied with -e/-f.
+    let mut script_pending = tool == "sed";
+    let mut expects_value = false;
+    let mut named_file = false;
+
+    for arg in rest {
+        if expects_value {
+            expects_value = false;
+            continue;
+        }
+        if arg == "-" {
+            return false; // explicit stdin
+        }
+        if let Some(flag) = arg.strip_prefix("--") {
+            if tool == "tail" && flag.starts_with("follow") {
+                return false; // never terminates
+            }
+            if flag.contains('=') {
+                if matches!(flag.split('=').next(), Some("expression" | "file")) {
+                    script_pending = false;
+                }
+                continue;
+            }
+            if matches!(flag, "lines" | "bytes") {
+                expects_value = true;
+            }
+            if matches!(flag, "expression" | "file") {
+                expects_value = true;
+                script_pending = false;
+            }
+            continue;
+        }
+        if let Some(short) = arg.strip_prefix('-') {
+            if short.is_empty() {
+                return false;
+            }
+            if tool == "tail" && short.contains('f') {
+                return false; // follow mode
+            }
+            if short.contains('e') || short.contains('f') {
+                script_pending = false;
+            }
+            // A trailing value flag consumes the next argument, but only when
+            // no value is already bundled in (`-n5`, `-n 5`).
+            if let Some(last) = short.chars().last() {
+                if value_flags.contains(&last) {
+                    expects_value = true;
+                }
+            }
+            continue;
+        }
+        if script_pending {
+            script_pending = false; // this was the sed script
+            continue;
+        }
+        named_file = true;
+    }
+    named_file
+}
+
+/// `sed` only counts as a file read when it cannot modify anything and is in
+/// print-only mode. Anything else (in-place edit, implicit print of a
+/// transformation) is left completely alone.
+fn sed_is_print_only(rest: &[String]) -> bool {
+    let mut has_quiet = false;
+    for arg in rest {
+        if arg.starts_with("--in-place") || arg == "-i" {
+            return false;
+        }
+        if let Some(short) = arg.strip_prefix('-') {
+            if !short.starts_with('-') && short.contains('i') {
+                return false; // bundled -i
+            }
+            if !short.starts_with('-') && short.contains('n') {
+                has_quiet = true;
+            }
+            if short == "-quiet" || short == "-silent" {
+                has_quiet = true;
+            }
+        }
+    }
+    has_quiet
 }
 
 pub async fn run(args: Vec<String>) -> i32 {
@@ -113,7 +278,11 @@ async fn run_inner(command: Vec<String>) -> Result<i32, String> {
     let event_id = unique_id("shell");
     let metadata = ArtifactMetadata {
         source_event_id: Some(event_id.clone()),
-        model: None,
+        // The ledger keys rollups by (model, surface) and shell entries use the
+        // tool name as the model. Recording it here is what lets a later
+        // `show --full` debit the recovery against the cell that earned the
+        // saving instead of a nameless one.
+        model: Some(command[0].clone()),
         surface: Some(SURFACE_SHELL.to_string()),
         claim_saved_bytes: 0,
     };
@@ -153,12 +322,21 @@ async fn run_inner(command: Vec<String>) -> Result<i32, String> {
         (rendered, true, len)
     } else {
         let filter = filter_for(&command);
-        let compact = match filter {
-            Some(name) => rtk_pipe(name, &stdout).await,
-            None => None,
+        // Below the floor there is nothing worth winning, and a lossy view the
+        // model then has to recover costs more than it saved. `git log -30`
+        // producing 2 KB is the motivating case: it was being cut to 4 of the
+        // 30 commits that were explicitly asked for.
+        let compact = if (stdout.len() as u64) < config.compress_min_bytes {
+            None
+        } else {
+            match filter {
+                Some(FILE_READ) => file_read_view(&stdout, &config),
+                Some(name) => rtk_pipe(name, &stdout).await,
+                None => None,
+            }
         };
 
-        // Only compress if RTK produced a strictly smaller stdout view.
+        // Only compress if the filter produced a strictly smaller stdout view.
         match compact {
             Some(view) if view.len() < stdout.len() => {
                 let omitted = count_lines(&stdout).saturating_sub(count_lines(&view));
@@ -276,6 +454,54 @@ fn count_lines(bytes: &[u8]) -> usize {
     }
 }
 
+/// Compact a file read: keep an exact numbered prefix, then map the rest by its
+/// signatures so the model can jump straight to a line instead of re-reading the
+/// whole file.
+///
+/// This deliberately does NOT hand back a signatures-only view. An outline is
+/// not an edit source, and a `cat` is very often edit preparation, so the head
+/// stays byte-exact and the omission is stated in lines, not hidden.
+fn file_read_view(stdout: &[u8], config: &Config) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(stdout);
+    let all: Vec<&str> = text.lines().collect();
+    let head = config.bash_read_head_lines;
+    if all.len() <= head {
+        return None; // short enough to hand over whole
+    }
+
+    let mut view = String::new();
+    for (index, line) in all.iter().take(head).enumerate() {
+        view.push_str(&format!("{}\t{}\n", index + 1, line));
+    }
+
+    // Map the omitted tail by its signatures, keeping real line numbers.
+    let tail_outline = crate::files::outline_view(&all[head..]);
+    let mut mapped = 0usize;
+    let mut tail = String::new();
+    for line in tail_outline.lines().skip(1) {
+        // outline_view emits "<n>\t<text>" numbered within the slice it was
+        // given; shift those back onto the whole file.
+        if let Some((number, body)) = line.split_once('\t') {
+            if let Ok(n) = number.trim().parse::<usize>() {
+                tail.push_str(&format!("{}\t{}\n", n + head, body));
+                mapped += 1;
+            }
+        }
+    }
+
+    view.push_str(&format!(
+        "\t… {} more lines (lines {}-{})\n",
+        all.len() - head,
+        head + 1,
+        all.len()
+    ));
+    if mapped > 0 {
+        view.push_str("MAP of the omitted lines (lexical signature scan — NOT AN EDIT SOURCE):\n");
+        view.push_str(&tail);
+    }
+    Some(view.into_bytes())
+}
+
 /// Locate the pinned RTK binary. Returns None if not installed.
 pub fn rtk_binary() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
@@ -324,7 +550,7 @@ mod tests {
 
     #[test]
     fn filter_map_covers_high_value_commands() {
-        assert_eq!(filter_for(&v(&["git", "log", "-20"])), Some("git-log"));
+        assert_eq!(filter_for(&v(&["git", "log"])), Some("git-log"));
         assert_eq!(filter_for(&v(&["git", "diff"])), Some("git-diff"));
         assert_eq!(filter_for(&v(&["cargo", "test"])), Some("cargo-test"));
         assert_eq!(filter_for(&v(&["pytest", "tests/"])), Some("pytest"));
@@ -342,6 +568,81 @@ mod tests {
         assert_eq!(filter_for(&v(&["rm", "-rf", "x"])), None);
         assert_eq!(filter_for(&v(&["echo", "hi"])), None);
         assert_eq!(filter_for(&[]), None);
+    }
+
+    #[test]
+    fn an_explicitly_bounded_git_log_is_delivered_whole() {
+        // The caller said how many commits they wanted; handing back four of
+        // forty is a loss they did not ask for.
+        assert_eq!(filter_for(&v(&["git", "log", "-40"])), None);
+        assert_eq!(filter_for(&v(&["git", "log", "--oneline", "-40"])), None);
+        assert_eq!(filter_for(&v(&["git", "log", "-n", "40"])), None);
+        assert_eq!(filter_for(&v(&["git", "log", "-n40"])), None);
+        assert_eq!(filter_for(&v(&["git", "log", "--max-count=40"])), None);
+        assert_eq!(filter_for(&v(&["git", "log", "--max-count", "40"])), None);
+        // Unbounded or bulk history is still worth compacting.
+        assert_eq!(filter_for(&v(&["git", "log"])), Some("git-log"));
+        assert_eq!(filter_for(&v(&["git", "log", "--since=2024-01-01"])), Some("git-log"));
+        assert_eq!(filter_for(&v(&["git", "log", "-5000"])), Some("git-log"));
+    }
+
+    #[test]
+    fn file_reads_naming_a_file_are_compressible() {
+        assert_eq!(filter_for(&v(&["cat", "src/main.rs"])), Some(FILE_READ));
+        assert_eq!(filter_for(&v(&["cat", "-n", "src/main.rs"])), Some(FILE_READ));
+        assert_eq!(filter_for(&v(&["head", "-100", "big.log"])), Some(FILE_READ));
+        assert_eq!(filter_for(&v(&["head", "-n", "100", "big.log"])), Some(FILE_READ));
+        assert_eq!(filter_for(&v(&["tail", "-n", "200", "big.log"])), Some(FILE_READ));
+        assert_eq!(filter_for(&v(&["sed", "-n", "1,80p", "src/main.rs"])), Some(FILE_READ));
+    }
+
+    #[test]
+    fn file_reads_without_a_file_would_read_stdin_and_are_refused() {
+        // The wrapper closes stdin, so rewriting these would turn real output
+        // into silence.
+        assert_eq!(filter_for(&v(&["cat"])), None);
+        assert_eq!(filter_for(&v(&["cat", "-"])), None);
+        assert_eq!(filter_for(&v(&["head", "-20"])), None);
+        assert_eq!(filter_for(&v(&["sed", "-n", "1,5p"])), None);
+    }
+
+    #[test]
+    fn never_touch_a_sed_that_can_write_or_a_tail_that_never_ends() {
+        assert_eq!(filter_for(&v(&["sed", "-i", "s/a/b/", "f.txt"])), None);
+        assert_eq!(filter_for(&v(&["sed", "-i.bak", "s/a/b/", "f.txt"])), None);
+        assert_eq!(filter_for(&v(&["sed", "--in-place", "s/a/b/", "f.txt"])), None);
+        // Without -n, sed prints a transformation rather than reading a file.
+        assert_eq!(filter_for(&v(&["sed", "s/a/b/", "f.txt"])), None);
+        assert_eq!(filter_for(&v(&["tail", "-f", "app.log"])), None);
+        assert_eq!(filter_for(&v(&["tail", "--follow", "app.log"])), None);
+    }
+
+    #[test]
+    fn file_read_view_keeps_an_exact_head_and_maps_the_rest() {
+        let mut config = Config::defaults(std::path::Path::new("/tmp"));
+        config.bash_read_head_lines = 3;
+        let mut source = String::from("line one\nline two\nline three\n");
+        for i in 0..40 {
+            source.push_str(&format!("fn generated_{i}() {{}}\n"));
+        }
+        let view = file_read_view(source.as_bytes(), &config).expect("compacted");
+        let text = String::from_utf8(view).unwrap();
+
+        // The head is byte-exact and numbered, so it is still an edit source.
+        assert!(text.starts_with("1\tline one\n2\tline two\n3\tline three\n"));
+        // The omission is stated in real line numbers, never silent.
+        assert!(text.contains("… 40 more lines (lines 4-43)"));
+        assert!(text.contains("NOT AN EDIT SOURCE"));
+        // Signature line numbers are shifted back onto the whole file: the
+        // first generated fn is source line 4, not line 1.
+        assert!(text.contains("4\tfn generated_0() {}"));
+        assert!(text.contains("43\tfn generated_39() {}"));
+    }
+
+    #[test]
+    fn file_read_view_declines_when_there_is_nothing_to_omit() {
+        let config = Config::defaults(std::path::Path::new("/tmp"));
+        assert!(file_read_view(b"a\nb\nc\n", &config).is_none());
     }
 
     #[test]

@@ -224,10 +224,15 @@ original one command away. It's on by default and needs no configuration.
 What it does:
 
 - **Compacts shell output automatically.** When your brain runs an eligible command
-  (`git log`/`diff`, test runners, `grep`, `find`, …), a hook reroutes it through the engine:
-  the command runs once, its full output is saved, and the model sees a compact view — e.g. a
-  10 KB `git log` becomes ~200 bytes. The full original is always recoverable with
-  `brain compress show <id> --full`.
+  (`git log`/`diff`, test runners, `grep`, `find`, and file reads via `cat`/`head`/`tail`/`sed -n`),
+  a hook reroutes it through the engine: the command runs once, its full output is saved, and the
+  model sees a compact view — e.g. a 10 KB `git log` becomes ~200 bytes. The full original is
+  always recoverable with `brain compress show <id> --full`.
+  Eligibility is judged per command, not per line, so `cd repo && git log` compacts the `git log`
+  and leaves the `cd` alone. Commands whose output is piped, redirected, or built in a subshell or
+  heredoc are never rewritten — `brain compress discover` lists those misses. Output under 2 KB,
+  and anything the caller already bounded (`git log -40`), is handed over whole: a lossy view you
+  then have to recover costs more than it saves.
 - **Leaner file reads.** `brain compress read <file> --outline` (just the signatures),
   `--query '<goal>'` (matching regions), or `--lines A:B` instead of pulling a huge file whole.
   `brain compress refs <symbol>` finds definitions, references, and callers via a real
@@ -245,13 +250,18 @@ What it does:
   Off by default; `brain setup` offers to enable it (it reads your transcripts, so it asks first).
 - **Honest measurement.** `brain compress savings` reports three separate numbers —
   provider-reported ground truth, exact bytes saved, and a labelled token estimate — and never
-  blends them into one inflated figure. `brain compress off` disables everything instantly.
+  blends them into one inflated figure. Recovering an artifact (`brain compress show … --full`)
+  is *debited* from the saving, so the figure reflects what compression actually netted rather
+  than only its wins. `brain compress off` disables everything instantly.
 
 **Typical savings** (measured on this project, not advertised):
 
 - **Command & file output — the big, reliable win.** Verbose output shrinks **~60–95%** before
-  it reaches the model: a 20-line `git log` went 10,881 → ~320 bytes (~97%), a recursive `grep`
+  it reaches the model: a `git log` went 10,881 → ~320 bytes (~97%), a recursive `grep`
   16,573 → 4,783 bytes (~71%). Every byte stays recoverable.
+  *Coverage matters as much as ratio.* Replaying 1,336 Bash calls from real sessions, the engine
+  now rewrites **50.5% of all command-output bytes** and cuts them by **43.7%** — against 0.02%
+  of bytes before eligibility became per-command (see H14 in the capabilities doc).
 - **Consultation answers — depends on model + effort.** Asking a consultant for a task-matched
   terse answer cut its *generated* output by **20–40%** on debugging/config/architecture
   questions (Grok-4.5, 30-call-per-arm A/B). On other question types the lever is the model and

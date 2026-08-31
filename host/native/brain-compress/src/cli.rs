@@ -14,7 +14,7 @@
 use crate::artifact::ArtifactStore;
 use crate::config::Config;
 use crate::http;
-use crate::ledger::{Ledger, RollupCell, Snapshot, Window};
+use crate::ledger::{Ledger, LedgerEntry, RollupCell, Snapshot, Window, SURFACE_SHELL};
 use crate::util::{compression_kill_switch, grouped_u64, human_bytes, state_dir, token_path, read_to_string};
 use std::env;
 use std::path::Path;
@@ -70,12 +70,20 @@ fn open_config_and_state() -> Result<(Config, std::path::PathBuf), String> {
 
 async fn cmd_status() -> Result<(), String> {
     let (config, state) = open_config_and_state()?;
-    println!("claude-brain compression (Stage 1 — observe-only)");
+    println!("claude-brain compression");
     match compression_kill_switch(&state) {
         Some(reason) => println!("  state:        DISABLED ({reason})"),
         None => println!("  state:        {}", if config.enabled { "enabled" } else { "disabled" }),
     }
-    println!("  mode:         {}", config.mode);
+    // Report what the subsystem actually does. The old `mode:` line printed a
+    // config field that gated nothing, so it read "observe" while shell output
+    // was being compressed.
+    println!(
+        "  shell:        compacting output over {} ({} exact head lines on file reads)",
+        human_bytes(config.compress_min_bytes),
+        config.bash_read_head_lines
+    );
+    println!("  read guard:   {}", config.read_guard);
     println!("  config:       {}", config.path.display());
 
     let store = ArtifactStore::new(&state, config.artifact_ttl_days, config.artifact_quota_bytes)?;
@@ -453,6 +461,9 @@ fn cmd_show(rest: &[String]) -> Result<(), String> {
 
     let bytes = store.read(&id)?;
     let text = String::from_utf8_lossy(&bytes);
+    // Count what we actually hand back, not what the artifact holds: a
+    // `--lines` recovery costs only the lines it prints.
+    let mut recovered: u64 = 0;
     match lines {
         Some(spec) => {
             let (start, end) = parse_line_range(&spec)?;
@@ -460,12 +471,45 @@ fn cmd_show(rest: &[String]) -> Result<(), String> {
                 let n = number + 1;
                 if n >= start && n <= end {
                     println!("{line}");
+                    recovered += line.len() as u64 + 1;
                 }
             }
         }
-        None => print!("{text}"),
+        None => {
+            print!("{text}");
+            recovered = bytes.len() as u64;
+        }
     }
+
+    // Recovery is the cost side of compression: these bytes were saved once and
+    // are now being spent again. Without this the ledger only ever counted the
+    // win, so every savings figure was structurally optimistic.
+    record_recovery(&state, &config, &manifest, recovered);
     Ok(())
+}
+
+/// Debit a recovery against the surface that produced the artifact.
+fn record_recovery(
+    state: &std::path::Path,
+    config: &Config,
+    manifest: &crate::artifact::ArtifactManifest,
+    recovered_bytes: u64,
+) {
+    if recovered_bytes == 0 {
+        return; // the ledger rejects empty recovery deltas, and rightly so
+    }
+    let surface = manifest.surface.as_deref().unwrap_or(SURFACE_SHELL);
+    let entry = LedgerEntry::new_recovery(
+        manifest.model.as_deref().unwrap_or("-"),
+        surface,
+        recovered_bytes,
+        &manifest.id,
+    );
+    if let Ok(ledger) = Ledger::new(state, config.estimated_bytes_per_token) {
+        if let Err(error) = ledger.append(&entry) {
+            eprintln!("brain compress: recovery not recorded (non-fatal): {error}");
+        }
+    }
 }
 
 fn parse_line_range(spec: &str) -> Result<(usize, usize), String> {
@@ -524,9 +568,25 @@ fn cmd_discover(_rest: &[String]) -> Result<(), String> {
     // Aggregate by the leading tool + subcommand so the report is compact.
     let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     for line in text.lines() {
+        // READ records are a different shape (`ts \t READ \t bytes \t lines \t path`)
+        // and are reported by the Read guard, not here.
         let command = line.splitn(2, '\t').nth(1).unwrap_or(line);
-        let mut parts = command.split_whitespace();
-        let key = match (parts.next(), parts.next()) {
+        if command.starts_with("READ\t") {
+            continue;
+        }
+        // Records written before escaping was added can still contain raw
+        // newlines; take only the first physical line of such a record so the
+        // fragments never masquerade as commands.
+        let command = unescape_record(command);
+        // Key on the compressible tool that was missed, not on the first word of
+        // the line: the whole point of the fix is that the tool is usually NOT
+        // first (`cd x && git log`), and reporting `cd` names the wrong thing.
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let anchor = words
+            .iter()
+            .position(|w| crate::hook::is_compressible_tool(w.rsplit('/').next().unwrap_or(w)))
+            .unwrap_or(0);
+        let key = match (words.get(anchor), words.get(anchor + 1)) {
             (Some(a), Some(b)) => format!("{a} {b}"),
             (Some(a), None) => a.to_string(),
             _ => continue,
@@ -544,9 +604,34 @@ fn cmd_discover(_rest: &[String]) -> Result<(), String> {
         println!("  {:>5}x  {key}", count);
     }
     println!();
-    println!("These ran through a pipe/redirect/quoting, so the hook did not rewrite them.");
+    println!("A compressible tool was in the line, but it sat behind a pipe, a redirect,");
+    println!("a subshell, or a heredoc — so the hook left the command alone.");
     println!("Run the core command on its own to get a compacted, recoverable view.");
     Ok(())
+}
+
+/// Inverse of the hook's `escape_record`.
+fn unescape_record(record: &str) -> String {
+    let mut out = String::with_capacity(record.len());
+    let mut chars = record.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 // --- doctor --------------------------------------------------------------------
