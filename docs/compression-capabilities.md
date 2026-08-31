@@ -309,3 +309,46 @@ plus two genuine extras, as a findings-only list — the same coverage the
 should pass `--effort low` (wired into the bridge agent docs / routing
 guidance). Together with H12 the H10 problem has two proven fixes: route
 review to a GPT-family model, or keep grok and drop effort to low.
+
+## H14 — Shell eligibility was the binding constraint, not filter quality (2026-08-31) ✅
+
+**Method.** Replayed every Bash call recorded in the 28 real session transcripts under
+`~/.claude/projects` (1336 calls, 1,727,653 result bytes) against the live
+`brain-compress hook pre-bash` decision, before and after the segment-aware rewrite.
+
+**Before.** Exactly **1 call (0.1%), 320 bytes (0.02%)** was eligible. The filters were never
+the problem — `hook.rs::is_simple()` vetoed any command containing a shell metacharacter, and
+real agent traffic is overwhelmingly compound. `cd` alone led 429 calls / 454 KB, and because
+discovery only inspected `tokens.first()`, the single largest miss class (`cd x && git log`)
+was invisible to `brain compress discover` too: the instrument could not see the fault.
+
+**After** (per-command segmentation + file-read filters): **269 calls (19.5%), 905,024 bytes
+(50.5%)** are rewritten. Replaying the recorded outputs through the real filters on the 212
+single-rewrite calls gives 714,230 → 402,236 bytes, a **43.7%** reduction on the newly
+eligible traffic. That is an offline replay estimate over recorded output, not provider
+ground truth; it is measured, not advertised.
+
+**Where the bytes actually are.** Not in the tools the filter table covered. Ranked by result
+bytes across the corpus: `head` 681 KB, `sed` 587 KB, `cat` 505 KB, `grep` 494 KB, `git`
+127 KB. File reading *through Bash* is the dominant surface, and it bypasses the `Read` guard
+entirely. RTK cannot help there — its generic `log` filter turns a 14 KB Rust source file into
+an "8 errors" summary — so file reads are compacted natively: exact numbered head, stated
+omission in real line numbers, then a signature map of the remainder.
+
+**Size distribution matters for the threshold.** File-read results have a median of 625 bytes
+and *nothing* above 32 KB, so the existing `large_file_bytes = 48 KiB` guard would never have
+fired on them. 111 calls over 4 KB carry 50% of all file-read bytes. Hence
+`compress_min_bytes = 2048`.
+
+**Two accounting corrections found the same day.** `LedgerEntry::new_recovery` had zero
+production callers, so `brain compress show --full` never debited `recovered_bytes` and every
+savings figure was structurally optimistic. Separately, `write_summary` summed per-cell
+`saved_bytes()` while `brain compress savings` subtracted recoveries globally — a recovery
+attributed to a different (model, surface) cell was clamped to zero and silently dropped, so
+the two disagreed. Both are fixed and covered by contract tests.
+
+**Rules that must not regress.** A command is rewritten only when it is a whole pipeline by
+itself (the wrapper gives its child no stdin, and a compacted view piped onward would be
+parsed rather than read); `sed -i` and `tail -f` are never rewritten; a file read with no
+named file would read the closed stdin and is refused; and output the caller already bounded
+(`git log -40`) is delivered whole rather than cut to four entries.

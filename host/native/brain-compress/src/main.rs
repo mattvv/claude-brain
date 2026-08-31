@@ -22,6 +22,7 @@ mod hook;
 mod http;
 mod ledger;
 mod recall;
+mod segment;
 mod shell;
 mod structured;
 mod symbols;

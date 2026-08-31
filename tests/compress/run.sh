@@ -124,12 +124,41 @@ rm -f "$BRAIN_STATE_DIR/compress/DISABLED"
 echo "== stage 2: shell compression + hook =="
 # Hook decisions are pure and need no proxy or rtk.
 hookjson() { printf '{"tool_name":"Bash","tool_input":{"command":"%s","description":"d"}}' "$1"; }
-REWRITE="$(hookjson 'git log -20' | "$BIN" hook pre-bash)"
-check "hook rewrites eligible command"   'printf "%s" "$REWRITE" | grep -q "brain-compress shell -- git log -20"'
+REWRITE="$(hookjson 'git log' | "$BIN" hook pre-bash)"
+check "hook rewrites eligible command"   'printf "%s" "$REWRITE" | grep -q "brain-compress shell -- git log"'
+check "explicitly bounded git log is left whole" '[ -z "$(hookjson "git log -40" | "$BIN" hook pre-bash)" ]'
 check "hook ignores piped command"       '[ -z "$(hookjson "git log | head" | "$BIN" hook pre-bash)" ]'
 check "hook ignores unmapped command"    '[ -z "$(hookjson "ls -la" | "$BIN" hook pre-bash)" ]'
 check "hook re-entrancy guard"           '[ -z "$(hookjson "brain-compress shell -- git log" | "$BIN" hook pre-bash)" ]'
 check "discover records the piped cmd"   '"$BIN" compress discover | grep -q "git log"'
+
+# Segment-aware eligibility (P0). A replay of 1336 recorded Bash calls against
+# the old whole-line veto matched exactly ONE, because real traffic is compound.
+COMPOUND="$(hookjson 'cd /tmp && git log --oneline' | "$BIN" hook pre-bash)"
+check "compound cmd rewrites the tool"   'printf "%s" "$COMPOUND" | grep -q "cd /tmp && brain-compress shell -- git log --oneline"'
+check "compound cmd leaves the cd alone" 'printf "%s" "$COMPOUND" | grep -qv "shell -- cd"'
+TWO="$(hookjson 'git log && git diff' | "$BIN" hook pre-bash)"
+check "every eligible segment rewrites"  '[ "$(printf "%s" "$TWO" | grep -o "shell -- git" | wc -l)" -eq 2 ]'
+check "rev syntax no longer rejected"    'hookjson "git diff HEAD~3" | "$BIN" hook pre-bash | grep -q "shell -- git diff HEAD~3"'
+check "quoted args survive the rewrite"  'hookjson "grep -rn foo bar src" | "$BIN" hook pre-bash | grep -q "shell -- grep -rn foo bar src"'
+check "redirect is never rewritten"      '[ -z "$(hookjson "git log > out.txt" | "$BIN" hook pre-bash)" ]'
+check "subshell is never rewritten"      '[ -z "$(hookjson "(cd x && git log)" | "$BIN" hook pre-bash)" ]'
+check "backgrounded is never rewritten"  '[ -z "$(hookjson "git log &" | "$BIN" hook pre-bash)" ]'
+check "both ends of a pipe left alone"   '[ -z "$(hookjson "cat f | grep x" | "$BIN" hook pre-bash)" ]'
+
+# File reads (P1): the largest surface by bytes in real traffic.
+check "cat of a named file rewrites"     'hookjson "cat src/main.rs" | "$BIN" hook pre-bash | grep -q "shell -- cat src/main.rs"'
+check "sed -n range rewrites"            'hookjson "sed -n 1,80p src/main.rs" | "$BIN" hook pre-bash | grep -q "shell -- sed -n 1,80p"'
+check "cat -n is not a value flag"       'hookjson "cat -n src/main.rs" | "$BIN" hook pre-bash | grep -q "shell -- cat -n src/main.rs"'
+check "stdin-reading cat is refused"     '[ -z "$(hookjson "cat" | "$BIN" hook pre-bash)" ]'
+check "sed -i is never rewritten"        '[ -z "$(hookjson "sed -i s/a/b/ f.txt" | "$BIN" hook pre-bash)" ]'
+check "tail -f is never rewritten"       '[ -z "$(hookjson "tail -f app.log" | "$BIN" hook pre-bash)" ]'
+
+# Discovery records stay machine-readable (P3).
+printf '{"tool_name":"Bash","tool_input":{"command":"cat <<EOF > /tmp/x\\n}\\nEOF"}}' | "$BIN" hook pre-bash >/dev/null
+check "heredoc miss stays on one line"   '[ "$(grep -c "cat <<EOF" "$BRAIN_STATE_DIR/compress/discover.log")" = "1" ]'
+check "discover names the missed tool"   'hookjson "cd /r && git log > o.txt" | "$BIN" hook pre-bash >/dev/null; "$BIN" compress discover | grep -q "git log"'
+check "discover never reports a heredoc fragment" '! "$BIN" compress discover | grep -qE "^ +[0-9]+x  (EOF|\})$"'
 
 # Link the real rtk into the sandbox HOME so the wrapper (which locates rtk via
 # $HOME) can find it.
@@ -141,18 +170,43 @@ fi
 
 # The shell wrapper needs rtk to actually compress; skip those checks if absent.
 if ls "$HOME"/.local/share/brain/vendor/rtk/*/rtk >/dev/null 2>&1; then
-  ( cd "$HERE/../.." && "$BIN" shell -- git log -20 ) >"$WORK/sh.out" 2>/dev/null
+  ( cd "$HERE/../.." && "$BIN" shell -- git log ) >"$WORK/sh.out" 2>/dev/null
   HDL="$(grep -oE 'bc_[A-Z0-9]+' "$WORK/sh.out" | head -1)"
   check "shell wrapper compresses git log" 'grep -q "brain-compress id=bc_" "$WORK/sh.out"'
-  check "shell view is smaller than raw"   '[ "$(wc -c <"$WORK/sh.out")" -lt "$(cd "$HERE/../.." && git log -20 | wc -c)" ]'
+  check "shell view is smaller than raw"   '[ "$(wc -c <"$WORK/sh.out")" -lt "$(cd "$HERE/../.." && git log | wc -c)" ]'
   if [ -n "$HDL" ]; then
     "$BIN" compress show "$HDL" --full >"$WORK/rec.out" 2>/dev/null
-    ( cd "$HERE/../.." && git log -20 ) >"$WORK/orig.out" 2>/dev/null
+    ( cd "$HERE/../.." && git log ) >"$WORK/orig.out" 2>/dev/null
     check "recovered raw == original bytes" 'diff -q "$WORK/rec.out" "$WORK/orig.out" >/dev/null'
   fi
   check "shell preserves exit code"        '"$BIN" shell -- git log --bogusflag >/dev/null 2>&1; [ $? -ne 0 ]'
   check "shell surface hits the ledger"    'grep -q "\"event_kind\":\"shell\"" "$BRAIN_STATE_DIR"/compress/ledger.jsonl'
   check "savings now shows measured bytes" '"$BIN" compress savings --json | grep -q "\"compressed_events\": [1-9]"'
+
+  # Recovery accounting (P2). A recovery spends the bytes the compaction saved,
+  # so it must be debited — otherwise every savings figure is optimistic.
+  check "recovery is recorded in the ledger" 'grep -q "\"event_kind\":\"recovery\"" "$BRAIN_STATE_DIR"/compress/ledger.jsonl'
+  # Compress a fresh file read, then recover it fully: the saving must vanish.
+  RSTATE="$WORK/recstate"; mkdir -p "$RSTATE/compress"
+  RID="$(BRAIN_STATE_DIR="$RSTATE" "$BIN" shell -- sed -n 1,400p "$CRATE/src/ledger.rs" | head -1 | grep -oE 'bc_[A-Z0-9]+')"
+  RSAVED_BEFORE="$(BRAIN_STATE_DIR="$RSTATE" "$BIN" compress savings --json | grep -o '"saved_bytes": [0-9]*' | grep -o '[0-9]*' | head -1)"
+  BRAIN_STATE_DIR="$RSTATE" "$BIN" compress show "$RID" --full >/dev/null 2>&1
+  RSAVED_AFTER="$(BRAIN_STATE_DIR="$RSTATE" "$BIN" compress savings --json | grep -o '"saved_bytes": [0-9]*' | grep -o '[0-9]*' | head -1)"
+  check "compaction registers a saving"      '[ "$RSAVED_BEFORE" -gt 0 ]'
+  check "full recovery debits the saving"    '[ "$RSAVED_AFTER" -lt "$RSAVED_BEFORE" ]'
+  check "savings and statusline summary agree" \
+    '[ "$RSAVED_AFTER" = "$(grep -o "saved_bytes=[0-9]*" "$RSTATE/compress/summary.txt" | grep -o "[0-9]*" | head -1)" ]'
+
+  # File reads are compacted natively (P1): exact head, stated omission.
+  BRAIN_STATE_DIR="$RSTATE" "$BIN" shell -- cat "$CRATE/src/ledger.rs" >"$WORK/fr.out" 2>/dev/null
+  check "file read keeps an exact head"      'grep -q "^1	use crate::util" "$WORK/fr.out"'
+  check "file read states its omission"      'grep -q "more lines (lines " "$WORK/fr.out"'
+  check "file read map is marked not-edit"   'grep -q "NOT AN EDIT SOURCE" "$WORK/fr.out"'
+  check "file read is recoverable"           'grep -q "brain compress show bc_" "$WORK/fr.out"'
+  # Small output is left alone: a lossy view there costs more than it saves.
+  printf 'tiny\n' >"$WORK/tiny.txt"
+  BRAIN_STATE_DIR="$RSTATE" "$BIN" shell -- cat "$WORK/tiny.txt" >"$WORK/tiny.out" 2>/dev/null
+  check "small output is not compacted"      '[ "$(cat "$WORK/tiny.out")" = "tiny" ]'
 else
   echo "  skip (rtk not installed — shell compression checks skipped)"
 fi

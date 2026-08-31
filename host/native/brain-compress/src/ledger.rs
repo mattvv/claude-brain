@@ -796,7 +796,21 @@ impl Ledger {
     }
 
     fn write_summary(&self, lifetime: &Aggregate) -> Result<(), String> {
-        let saved_bytes: u64 = lifetime.cells.iter().map(RollupCell::saved_bytes).sum();
+        // Total the three quantities separately rather than summing per-cell
+        // `saved_bytes()`. A recovery is attributed to the artifact's own
+        // (model, surface) cell, which is not always the cell that recorded the
+        // compression; per-cell subtraction would clamp at zero there and drop
+        // the debit, making this disagree with `brain compress savings`.
+        let compressed_raw: u64 = lifetime.cells.iter().map(|c| c.compressed_raw_bytes).sum();
+        let compressed_delivered: u64 = lifetime
+            .cells
+            .iter()
+            .map(|c| c.compressed_delivered_bytes)
+            .sum();
+        let recovered: u64 = lifetime.cells.iter().map(|c| c.recovered_bytes).sum();
+        let saved_bytes = compressed_raw
+            .saturating_sub(compressed_delivered)
+            .saturating_sub(recovered);
         let compressed_samples: u64 = lifetime
             .cells
             .iter()

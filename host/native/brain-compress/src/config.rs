@@ -6,10 +6,18 @@ pub const DEFAULT_ARTIFACT_TTL_DAYS: u64 = 30;
 pub const DEFAULT_ESTIMATED_BYTES_PER_TOKEN: f64 = 4.0;
 pub const DEFAULT_MINIMUM_CLAIM_SAMPLES: u64 = 30;
 pub const DEFAULT_CONSULT_LOGS: usize = 20;
+/// Below this much output there is no win worth a lossy view: the model would
+/// spend more recovering the original than the compaction ever saved.
+pub const DEFAULT_COMPRESS_MIN_BYTES: u64 = 2048;
+/// Exact, byte-for-byte lines kept at the head of a compacted file read.
+pub const DEFAULT_BASH_READ_HEAD_LINES: usize = 60;
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub enabled: bool,
+    /// Deprecated and ignored. It never gated anything — compression ran
+    /// regardless of its value — so reporting it was actively misleading. Still
+    /// parsed so that configs written by older versions keep loading.
     pub mode: String,
     pub artifact_quota_bytes: u64,
     pub artifact_ttl_days: u64,
@@ -22,6 +30,10 @@ pub struct Config {
     pub read_guard: String,
     pub large_file_lines: usize,
     pub large_file_bytes: u64,
+    /// Smallest command output worth compacting, in bytes.
+    pub compress_min_bytes: u64,
+    /// Exact lines kept at the head of a compacted `cat`/`head`/`tail`/`sed -n`.
+    pub bash_read_head_lines: usize,
     /// Duplicate-result elision (design §5a): byte-identical successful
     /// results within the scope window become references to the earlier view.
     pub dedup_enabled: bool,
@@ -57,6 +69,8 @@ impl Config {
             read_guard: "observe".to_string(),
             large_file_lines: 800,
             large_file_bytes: 48 * 1024,
+            compress_min_bytes: DEFAULT_COMPRESS_MIN_BYTES,
+            bash_read_head_lines: DEFAULT_BASH_READ_HEAD_LINES,
             dedup_enabled: true,
             dedup_window_hours: 8,
             explore_models: vec!["gpt-5.6-luna".to_string(), "grok-4.5".to_string()],
@@ -274,6 +288,24 @@ impl Config {
                         )
                     })?;
                 }
+                "file_tools.compress_min_bytes" => {
+                    config.compress_min_bytes = value.parse::<u64>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid file_tools.compress_min_bytes: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
+                "file_tools.bash_read_head_lines" => {
+                    config.bash_read_head_lines = value.parse::<usize>().map_err(|error| {
+                        format!(
+                            "{}:{}: invalid file_tools.bash_read_head_lines: {error}",
+                            config.path.display(),
+                            line_number + 1
+                        )
+                    })?;
+                }
                 // Forward-compatible and informational keys are deliberately ignored.
                 "version"
                 | "ledger.format"
@@ -284,9 +316,12 @@ impl Config {
             }
         }
 
-        if config.mode != "observe" {
+        // `mode` is deprecated and gates nothing, so it is no longer validated:
+        // rejecting a value we then ignore only broke configs for no benefit.
+
+        if config.bash_read_head_lines == 0 {
             return Err(format!(
-                "{}: Stage 1 only supports mode = \"observe\"",
+                "{}: file_tools.bash_read_head_lines must be greater than zero",
                 config.path.display()
             ));
         }

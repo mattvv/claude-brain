@@ -10,13 +10,18 @@
 //! consult-poll-guard hook is the only DENY hook, so the two compose without the
 //! "two mutating hooks" hazard: at most one hook changes the command.
 //!
-//! Eligibility is deliberately conservative: the command must contain no shell
-//! metacharacters (pipes, redirects, sequencing, substitution, globbing,
-//! quoting). Anything else passes through untouched. Commands that start with a
-//! compressible tool but are too complex to rewrite are recorded for
-//! `brain compress discover`.
+//! Eligibility is per-command, not per-line: `crate::segment` splits the line
+//! into individual commands and each one is judged on its own, so
+//! `cd x && git log` compresses the `git log` and leaves the `cd` alone. A
+//! command is only rewritten when it is a whole pipeline by itself — anything
+//! reading from or writing to a pipe is left untouched, because the wrapper
+//! gives its child no stdin and its compacted view would be parsed by the next
+//! stage rather than read by the model. Commands the scanner cannot reason
+//! about at all (redirects, substitution, subshells, heredocs) pass through
+//! untouched and are recorded for `brain compress discover`.
 
 use crate::config::Config;
+use crate::segment::{self, Split};
 use crate::shell::filter_for;
 use crate::util::{compression_kill_switch, state_dir, unix_seconds};
 use serde_json::{json, Value};
@@ -58,7 +63,7 @@ fn pre_bash() -> i32 {
         Some(command) => command.trim(),
         None => return 0,
     };
-    if command.is_empty() || command.starts_with("brain-compress") {
+    if command.is_empty() || command.contains("brain-compress shell") {
         return 0; // re-entrancy guard
     }
 
@@ -78,29 +83,27 @@ fn pre_bash() -> i32 {
         crate::dedup::record_session(&state, session);
     }
 
-    let tokens: Vec<String> = command.split_whitespace().map(str::to_string).collect();
-    let eligible = is_simple(command) && filter_for(&tokens).is_some();
-
-    if !eligible {
-        // Record a missed opportunity when a compressible tool is present but the
-        // command was too complex (pipes, redirects, quoting) to rewrite safely.
-        if let Some(first) = tokens.first() {
-            if is_compressible_tool(first) && !is_simple(command) {
+    let rewritten = match rewrite(command) {
+        Rewrite::Changed(next) => next,
+        Rewrite::Unchanged { missed } => {
+            // Record a missed opportunity when a compressible tool was present
+            // but we could not rewrite it safely. This is what
+            // `brain compress discover` reports, so it has to see the misses
+            // that matter — including ones where the compressible tool is not
+            // the first word (`cd x && git log`).
+            if missed {
                 record_discovery(&state, command);
             }
+            return 0;
         }
-        return 0;
-    }
+    };
 
-    // Rewrite: reroute through the shell wrapper. The command is known to contain
-    // only safe characters, so the real shell will tokenize it into the same argv
-    // the wrapper runs directly.
+    // Rewrite: reroute the understood commands through the shell wrapper. Each
+    // rewritten command keeps its original source text, so the real shell
+    // tokenizes it into exactly the argv the wrapper runs.
     let mut new_input = tool_input.clone();
     if let Value::Object(map) = &mut new_input {
-        map.insert(
-            "command".to_string(),
-            Value::String(format!("brain-compress shell -- {command}")),
-        );
+        map.insert("command".to_string(), Value::String(rewritten));
     } else {
         return 0;
     }
@@ -215,21 +218,100 @@ fn background_flag(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// A command is "simple" if it contains no shell metacharacters at all: no
-/// pipes, redirects, sequencing, subshells, substitution, globbing, or quoting.
-/// Only then is whitespace tokenization equivalent to the shell's own parsing.
-fn is_simple(command: &str) -> bool {
-    if command.contains(['\n', '\r', '\t']) {
-        return false;
-    }
-    command.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, ' ' | '.' | '_' | '/' | '-' | '=' | '+' | '@' | ':' | ',' | '%')
-    })
+pub(crate) enum Rewrite {
+    /// The command line with `brain-compress shell -- ` spliced in front of every
+    /// command we know how to compact.
+    Changed(String),
+    /// Nothing to rewrite. `missed` is true when a compressible tool was in
+    /// there somewhere but we could not reach it safely.
+    Unchanged { missed: bool },
 }
 
-fn is_compressible_tool(first: &str) -> bool {
-    matches!(first, "git" | "cargo" | "pytest" | "py.test" | "go" | "grep" | "rg" | "find" | "vitest" | "tsc")
+/// Decide what, if anything, to reroute through the shell wrapper.
+pub(crate) fn rewrite(command: &str) -> Rewrite {
+    const PREFIX: &str = "brain-compress shell -- ";
+
+    let segments = match segment::split(command) {
+        Split::Commands(segments) => segments,
+        // We could not parse it, so we cannot rewrite any part of it. It still
+        // counts as a miss if a compressible tool appears anywhere in the line.
+        Split::Unsupported => {
+            return Rewrite::Unchanged {
+                missed: mentions_compressible_tool(command),
+            }
+        }
+    };
+
+    let mut insert_at: Vec<usize> = Vec::new();
+    let mut missed = false;
+    for seg in &segments {
+        let text = &command[seg.start..seg.end];
+        let words = match segment::words(text) {
+            Some(words) => words,
+            None => continue,
+        };
+        if filter_for(&words).is_none() {
+            continue;
+        }
+        // A command that reads from or writes to a pipe must be left alone: the
+        // wrapper hands its child no stdin, and a compacted view piped into the
+        // next stage would be parsed rather than read.
+        if seg.pipeline_len > 1 {
+            missed = true;
+            continue;
+        }
+        insert_at.push(seg.start);
+    }
+
+    if insert_at.is_empty() {
+        return Rewrite::Unchanged { missed };
+    }
+
+    // Splice back-to-front so earlier offsets stay valid.
+    let mut out = command.to_string();
+    for offset in insert_at.iter().rev() {
+        out.insert_str(*offset, PREFIX);
+    }
+    Rewrite::Changed(out)
+}
+
+/// Whether a compressible tool appears as the first word of any whitespace-run
+/// in the line. Used only for miss accounting on lines we could not parse, so a
+/// loose match is right: it is a hint for `brain compress discover`, not a
+/// rewrite decision.
+fn mentions_compressible_tool(command: &str) -> bool {
+    command
+        .split(|c: char| c.is_whitespace() || matches!(c, '|' | '&' | ';' | '(' | ')'))
+        .any(|word| {
+            let base = word.rsplit('/').next().unwrap_or(word);
+            is_compressible_tool(base)
+        })
+}
+
+pub(crate) fn is_compressible_tool(first: &str) -> bool {
+    matches!(
+        first,
+        "git"
+            | "cargo"
+            | "pytest"
+            | "py.test"
+            | "go"
+            | "grep"
+            | "rg"
+            | "find"
+            | "fd"
+            | "vitest"
+            | "tsc"
+            | "mypy"
+            | "ruff"
+            | "prettier"
+            | "phpstan"
+            | "phpunit"
+            | "cat"
+            | "head"
+            | "tail"
+            | "sed"
+    )
 }
 
 fn record_discovery(state: &std::path::Path, command: &str) {
@@ -237,7 +319,11 @@ fn record_discovery(state: &std::path::Path, command: &str) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let line = format!("{}\t{}\n", unix_seconds(), command);
+    // The log is TSV and a command may be several lines long (heredocs, loops),
+    // so escape before writing: an unescaped newline used to split one command
+    // into rows and `brain compress discover` reported the fragments (`}`,
+    // `EOF`, "```bash") as if they were commands.
+    let line = format!("{}\t{}\n", unix_seconds(), escape_record(command));
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -248,27 +334,128 @@ fn record_discovery(state: &std::path::Path, command: &str) {
     }
 }
 
+/// Render a command as a single TSV-safe line.
+pub(crate) fn escape_record(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    for c in command.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_simple;
+    use super::*;
 
-    #[test]
-    fn simple_commands_are_eligible() {
-        assert!(is_simple("git log -20"));
-        assert!(is_simple("cargo test"));
-        assert!(is_simple("grep -rn foo src/dir"));
-        assert!(is_simple("go test ./..."));
+    fn changed(command: &str) -> String {
+        match rewrite(command) {
+            Rewrite::Changed(out) => out,
+            Rewrite::Unchanged { .. } => panic!("expected a rewrite: {command}"),
+        }
+    }
+
+    fn unchanged(command: &str) -> bool {
+        matches!(rewrite(command), Rewrite::Unchanged { .. })
     }
 
     #[test]
-    fn shell_metacharacters_disqualify() {
-        assert!(!is_simple("git log | head"));
-        assert!(!is_simple("git log > out.txt"));
-        assert!(!is_simple("git log && echo done"));
-        assert!(!is_simple("echo $(whoami)"));
-        assert!(!is_simple("grep 'foo bar' src"));
-        assert!(!is_simple("ls *.rs"));
-        assert!(!is_simple("cat a; cat b"));
-        assert!(!is_simple("git log\nrm -rf /"));
+    fn a_plain_command_is_rewritten() {
+        assert_eq!(changed("git log"), "brain-compress shell -- git log");
+        assert_eq!(changed("cargo test"), "brain-compress shell -- cargo test");
+    }
+
+    #[test]
+    fn compound_commands_rewrite_only_the_compressible_parts() {
+        // This is the case the old whole-string veto missed, and it is the most
+        // common shape in real traffic.
+        assert_eq!(
+            changed("cd /tmp && git log"),
+            "cd /tmp && brain-compress shell -- git log"
+        );
+        assert_eq!(
+            changed("git log && git diff"),
+            "brain-compress shell -- git log && brain-compress shell -- git diff"
+        );
+        assert_eq!(
+            changed("echo hi; grep -rn foo src"),
+            "echo hi; brain-compress shell -- grep -rn foo src"
+        );
+    }
+
+    #[test]
+    fn surrounding_whitespace_and_separators_are_preserved() {
+        assert_eq!(
+            changed("cd /tmp   &&   git log --oneline"),
+            "cd /tmp   &&   brain-compress shell -- git log --oneline"
+        );
+    }
+
+    #[test]
+    fn quoted_arguments_survive_because_the_shell_retokenizes_them() {
+        assert_eq!(
+            changed("grep -rn 'foo bar' src"),
+            "brain-compress shell -- grep -rn 'foo bar' src"
+        );
+        // Revision syntax used to be rejected by the character allowlist.
+        assert_eq!(
+            changed("git diff HEAD~3"),
+            "brain-compress shell -- git diff HEAD~3"
+        );
+    }
+
+    #[test]
+    fn piped_commands_are_never_rewritten() {
+        // The wrapper gives its child no stdin and its view would be parsed by
+        // the next stage, so both ends of a pipe must be left alone.
+        assert!(unchanged("git log | head -5"));
+        assert!(unchanged("cat f | grep foo"));
+        assert!(unchanged("grep -rn x src | wc -l"));
+    }
+
+    #[test]
+    fn constructs_we_cannot_reason_about_are_left_alone() {
+        assert!(unchanged("git log > out.txt"));
+        assert!(unchanged("echo $(git log)"));
+        assert!(unchanged("(cd x && git log)"));
+        assert!(unchanged("git log &"));
+        assert!(unchanged("git log\nrm -rf /"));
+        assert!(unchanged("ls -la"));
+        assert!(unchanged("git push"));
+    }
+
+    #[test]
+    fn re_entrancy_is_impossible_because_a_rewrite_is_never_reparsed() {
+        // The pre_bash guard drops anything already carrying the wrapper, but
+        // the rewrite itself must also be stable if it ever were re-run.
+        let once = changed("cd /tmp && git log");
+        assert!(once.contains("brain-compress shell -- git log"));
+        assert_eq!(once.matches("brain-compress shell").count(), 1);
+    }
+
+    #[test]
+    fn misses_are_recorded_even_when_the_tool_is_not_the_first_word() {
+        // The old discovery check only looked at the first token, so the single
+        // biggest miss class was invisible to it.
+        match rewrite("cd /tmp && git log > out.txt") {
+            Rewrite::Unchanged { missed } => assert!(missed),
+            Rewrite::Changed(_) => panic!("redirect must not be rewritten"),
+        }
+        match rewrite("cd /tmp && echo hi > out.txt") {
+            Rewrite::Unchanged { missed } => assert!(!missed),
+            Rewrite::Changed(_) => panic!("no compressible tool here"),
+        }
+    }
+
+    #[test]
+    fn discovery_records_stay_on_one_line() {
+        let escaped = escape_record("cat <<'EOF'\nbody\nEOF");
+        assert!(!escaped.contains('\n'));
+        assert_eq!(escaped, "cat <<'EOF'\\nbody\\nEOF");
     }
 }

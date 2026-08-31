@@ -1,14 +1,11 @@
-# claude-brain compression config (Stage 1: observe-only).
+# claude-brain compression config.
 # Managed by `brain compress`. Kill switch: `brain compress off` or
 # `touch $BRAIN_STATE_DIR/compress/DISABLED` (works even if this file is bad).
 version = 1
 
-# Master switch for the observe-only subsystem. When false, brain-ask behaves
-# exactly like the legacy Bash implementation and records nothing.
+# Master switch for the subsystem. When false, brain-ask behaves exactly like
+# the legacy Bash implementation and records nothing.
 enabled = true
-
-# Stage 1 only supports observe. Compression modes arrive in later stages.
-mode = "observe"
 
 [artifacts]
 # Content-addressed raw-artifact store, so a future lossy view always has an
@@ -42,6 +39,13 @@ consult_logs = 20
 read_guard = "observe"
 large_file_lines = 800
 large_file_bytes = 49152
+# Smallest command output worth compacting. Below this a lossy view saves less
+# than recovering the original would cost.
+compress_min_bytes = 2048
+# Exact, byte-for-byte lines kept at the head of a compacted file read
+# (cat/head/tail/sed -n). The omitted remainder is mapped by signature with real
+# line numbers, and the full text stays recoverable.
+bash_read_head_lines = 60
 
 [explore]
 # `brain explore "QUESTION"` navigates the repo with a cheap model so the main
