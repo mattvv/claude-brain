@@ -127,6 +127,9 @@ hookjson() { printf '{"tool_name":"Bash","tool_input":{"command":"%s","descripti
 REWRITE="$(hookjson 'git log' | "$BIN" hook pre-bash)"
 check "hook rewrites eligible command"   'printf "%s" "$REWRITE" | grep -q "brain-compress shell -- git log"'
 check "explicitly bounded git log is left whole" '[ -z "$(hookjson "git log -40" | "$BIN" hook pre-bash)" ]'
+# The rewritten command runs in a shell that may not have ~/.local/bin on PATH,
+# so the wrapper must be invoked by absolute path or it fails with exit 127.
+check "wrapper invoked by absolute path" 'printf "%s" "$REWRITE" | grep -q "\"command\":\"/"'
 check "hook ignores piped command"       '[ -z "$(hookjson "git log | head" | "$BIN" hook pre-bash)" ]'
 check "hook ignores unmapped command"    '[ -z "$(hookjson "ls -la" | "$BIN" hook pre-bash)" ]'
 check "hook re-entrancy guard"           '[ -z "$(hookjson "brain-compress shell -- git log" | "$BIN" hook pre-bash)" ]'
@@ -135,7 +138,7 @@ check "discover records the piped cmd"   '"$BIN" compress discover | grep -q "gi
 # Segment-aware eligibility (P0). A replay of 1336 recorded Bash calls against
 # the old whole-line veto matched exactly ONE, because real traffic is compound.
 COMPOUND="$(hookjson 'cd /tmp && git log --oneline' | "$BIN" hook pre-bash)"
-check "compound cmd rewrites the tool"   'printf "%s" "$COMPOUND" | grep -q "cd /tmp && brain-compress shell -- git log --oneline"'
+check "compound cmd rewrites the tool"   'printf "%s" "$COMPOUND" | grep -q "cd /tmp && .*brain-compress shell -- git log --oneline"'
 check "compound cmd leaves the cd alone" 'printf "%s" "$COMPOUND" | grep -qv "shell -- cd"'
 TWO="$(hookjson 'git log && git diff' | "$BIN" hook pre-bash)"
 check "every eligible segment rewrites"  '[ "$(printf "%s" "$TWO" | grep -o "shell -- git" | wc -l)" -eq 2 ]'
