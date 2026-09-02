@@ -83,7 +83,7 @@ fn pre_bash() -> i32 {
         crate::dedup::record_session(&state, session);
     }
 
-    let rewritten = match rewrite(command) {
+    let rewritten = match rewrite(command, &wrapper_command()) {
         Rewrite::Changed(next) => next,
         Rewrite::Unchanged { missed } => {
             // Record a missed opportunity when a compressible tool was present
@@ -218,6 +218,36 @@ fn background_flag(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// How to invoke the shell wrapper from the rewritten command.
+///
+/// This must be an ABSOLUTE path, not the bare name. The rewritten command runs
+/// in whatever shell Claude Code spawns, and that shell does not necessarily
+/// have `~/.local/bin` on its PATH — a non-interactive shell that never sources
+/// the profile does not. When it doesn't, a bare `brain-compress` fails with
+/// exit 127 and takes the user's actual command down with it. We are the binary
+/// being asked, so we already know exactly where we live.
+fn wrapper_command() -> String {
+    match std::env::current_exe() {
+        Ok(path) => shell_quote(&path.to_string_lossy()),
+        // If the platform cannot tell us, fall back to the name and hope PATH
+        // has it — still better than refusing to compress at all.
+        Err(_) => "brain-compress".to_string(),
+    }
+}
+
+/// Quote a path for the shell only when it needs it.
+fn shell_quote(path: &str) -> String {
+    let safe = !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'));
+    if safe {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', r"'\''"))
+    }
+}
+
 pub(crate) enum Rewrite {
     /// The command line with `brain-compress shell -- ` spliced in front of every
     /// command we know how to compact.
@@ -227,9 +257,10 @@ pub(crate) enum Rewrite {
     Unchanged { missed: bool },
 }
 
-/// Decide what, if anything, to reroute through the shell wrapper.
-pub(crate) fn rewrite(command: &str) -> Rewrite {
-    const PREFIX: &str = "brain-compress shell -- ";
+/// Decide what, if anything, to reroute through the shell wrapper. `wrapper` is
+/// how to invoke this binary from the rewritten command line.
+pub(crate) fn rewrite(command: &str, wrapper: &str) -> Rewrite {
+    let prefix = format!("{wrapper} shell -- ");
 
     let segments = match segment::split(command) {
         Split::Commands(segments) => segments,
@@ -270,7 +301,7 @@ pub(crate) fn rewrite(command: &str) -> Rewrite {
     // Splice back-to-front so earlier offsets stay valid.
     let mut out = command.to_string();
     for offset in insert_at.iter().rev() {
-        out.insert_str(*offset, PREFIX);
+        out.insert_str(*offset, &prefix);
     }
     Rewrite::Changed(out)
 }
@@ -353,15 +384,17 @@ pub(crate) fn escape_record(command: &str) -> String {
 mod tests {
     use super::*;
 
+    // Tests pin the wrapper to the bare name so the expected strings stay
+    // readable; production always passes an absolute path.
     fn changed(command: &str) -> String {
-        match rewrite(command) {
+        match rewrite(command, "brain-compress") {
             Rewrite::Changed(out) => out,
             Rewrite::Unchanged { .. } => panic!("expected a rewrite: {command}"),
         }
     }
 
     fn unchanged(command: &str) -> bool {
-        matches!(rewrite(command), Rewrite::Unchanged { .. })
+        matches!(rewrite(command, "brain-compress"), Rewrite::Unchanged { .. })
     }
 
     #[test]
@@ -442,14 +475,40 @@ mod tests {
     fn misses_are_recorded_even_when_the_tool_is_not_the_first_word() {
         // The old discovery check only looked at the first token, so the single
         // biggest miss class was invisible to it.
-        match rewrite("cd /tmp && git log > out.txt") {
+        match rewrite("cd /tmp && git log > out.txt", "brain-compress") {
             Rewrite::Unchanged { missed } => assert!(missed),
             Rewrite::Changed(_) => panic!("redirect must not be rewritten"),
         }
-        match rewrite("cd /tmp && echo hi > out.txt") {
+        match rewrite("cd /tmp && echo hi > out.txt", "brain-compress") {
             Rewrite::Unchanged { missed } => assert!(!missed),
             Rewrite::Changed(_) => panic!("no compressible tool here"),
         }
+    }
+
+    #[test]
+    fn the_wrapper_is_invoked_by_absolute_path_not_by_name() {
+        // The rewritten command runs in whatever shell Claude Code spawns, and
+        // that shell may not have ~/.local/bin on PATH. A bare name there fails
+        // with exit 127 and takes the user's real command down with it.
+        let wrapper = wrapper_command();
+        assert!(
+            wrapper.starts_with('/') || wrapper.starts_with('\''),
+            "wrapper must be an absolute path, got {wrapper:?}"
+        );
+        let out = match rewrite("git log", &wrapper) {
+            Rewrite::Changed(out) => out,
+            Rewrite::Unchanged { .. } => panic!("expected a rewrite"),
+        };
+        assert!(out.starts_with(&wrapper), "rewrite must use the resolved path: {out:?}");
+        assert!(out.ends_with(" shell -- git log"));
+    }
+
+    #[test]
+    fn a_wrapper_path_needing_quotes_gets_them() {
+        assert_eq!(shell_quote("/usr/local/bin/brain-compress"), "/usr/local/bin/brain-compress");
+        assert_eq!(shell_quote("/home/a b/brain-compress"), "'/home/a b/brain-compress'");
+        // A quoted path still satisfies the re-entrancy guard.
+        assert!(shell_quote("/home/a b/brain-compress").contains("brain-compress"));
     }
 
     #[test]
