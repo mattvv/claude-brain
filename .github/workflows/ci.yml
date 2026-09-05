@@ -21,11 +21,15 @@ jobs:
         run: |
           sudo apt-get install -y cloud-init
           cloud-init schema --config-file cloud-init.yaml
-      - name: patch checksum matches PIN
+      - name: patch series matches PIN
+        # Two links in one chain: PIN pins SERIES, SERIES pins every patch.
+        # Both must hold or the build would apply unverified patches.
         run: |
-          pinned=$(sed -n 's/^PATCH_SHA256=//p' host/proxy/PIN)
-          actual=$(sha256sum host/proxy/patches/cliproxyapi-claude-effort.patch | cut -d' ' -f1)
+          pinned=$(sed -n 's/^SERIES_SHA256=//p' host/proxy/PIN)
+          actual=$(sha256sum host/proxy/patches/SERIES | cut -d' ' -f1)
+          test -n "$pinned"
           test "$pinned" = "$actual"
+          (cd host/proxy/patches && sha256sum -c SERIES)
       - name: compat symlink still resolves
         # Installs made before the droplet/ -> host/ rename run
         # $REPO/droplet/install.sh after `git pull`. If this breaks, `brain
