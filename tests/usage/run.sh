@@ -139,6 +139,7 @@ check "critical: Explore denied"             '[ "$(gate Explore)" = "deny" ]'
 check "critical: Plan denied"                '[ "$(gate Plan)" = "deny" ]'
 check "critical: general-purpose denied"     '[ "$(gate general-purpose)" = "deny" ]'
 check "critical: brain-sol allowed"          '[ "$(gate brain-sol)" = "allow" ]'
+check "critical: brain-astra allowed"         '[ "$(gate brain-astra)" = "allow" ]'
 check "critical: brain-grok allowed"         '[ "$(gate brain-grok)" = "allow" ]'
 check "critical: empty agent allowed"        '[ "$(gate "")" = "allow" ]'
 refresh flat-ok.json
@@ -283,8 +284,10 @@ check "hook deny explains the reserve"       'grep -q "preserve the Claude reser
 check "hook deny names an alternative"       'grep -q "brain-sol" "$WORK/hook.err"'
 check "hook deny names the override"         'grep -q "usage override" "$WORK/hook.err"'
 check "hook allows brain-sol"                '[ "$(hook brain-sol)" = "0" ]'
+check "hook allows brain-astra"               '[ "$(hook brain-astra)" = "0" ]'
 unlink_all
 check "unlinked-vendor deny still fires"     '[ "$(hook brain-sol)" = "2" ]'
+check "  ...for brain-astra too"              '[ "$(hook brain-astra)" = "2" ]'
 check "  ...with the original message"       'grep -q "brain auth chatgpt" "$WORK/hook.err"'
 link codex
 

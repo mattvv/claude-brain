@@ -34,7 +34,7 @@ AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
 AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
 
 # Names covered by both lanes; installing one lane removes the other's copies.
-ALL_BRAIN_AGENTS=(brain-fable brain-grok brain-kimi brain-luna brain-sol brain-terra)
+ALL_BRAIN_AGENTS=(brain-astra brain-fable brain-grok brain-kimi brain-luna brain-sol brain-terra)
 
 install_agents() {
   local src="$1" name f
@@ -276,12 +276,14 @@ cmd_multi() {
   local token
   token="$(brain_token)"
   info "starting multi-model session (tmux: brain-multi) — no phone control in this mode"
-  # 372000 = smallest context window across the cast (gpt-5.6-* models).
+  # 272000 = smallest context window across the cast. gpt-6-astra is 272k in the
+  # pinned catalog, below the gpt-5.6-* 372k; the cap has to track the minimum or
+  # a full context overflows whichever agent has the smallest window.
   exec tmux new-session -A -s brain-multi \
     "env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN \
        ANTHROPIC_BASE_URL=$BRAIN_PROXY_URL \
        ANTHROPIC_AUTH_TOKEN=$token \
-       CLAUDE_CODE_MAX_CONTEXT_TOKENS=372000 \
+       CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000 \
        $(claude_bin) --model 'claude-fable-5[1m]'; exec bash"
 }
 

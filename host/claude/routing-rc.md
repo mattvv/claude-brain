@@ -8,16 +8,20 @@ task class; if the first choice's vendor isn't linked, fall back down the list.
 |---|---|---|
 | Mechanical work: boilerplate, data transforms, scaffolding, test generation | do it yourself, or `brain-luna` for bulk | `low` |
 | Frontend / React / UI | `brain-terra`, `brain-sol` | `high` |
-| Hard debugging, gnarly logic, high-recall code review | `brain-sol`, `brain-grok` | `xhigh` |
+| Hard debugging, gnarly logic, high-recall code review | `brain-astra`, `brain-sol`, `brain-grok` | `xhigh` |
 | Systems / Rust / C++ / terminal-heavy | `brain-grok`, `brain-sol` | `high` |
 | Digesting huge inputs (long logs, whole directories) | `brain-kimi` | `high` |
 | Second opinion on an important conclusion | a DIFFERENT family than produced it: `brain-grok` or `brain-sol` | `high` |
 
 Rules:
-- Easy tasks stay cheap: never send trivial work to `brain-sol` at `xhigh` — handle it
-  yourself or use `brain-luna --effort low`.
-- Escalate, don't spin: if you've failed twice on a hard problem, consult `brain-sol`
+- Easy tasks stay cheap: never send trivial work to `brain-astra` or `brain-sol` at
+  `xhigh` — handle it yourself or use `brain-luna --effort low`.
+- Escalate, don't spin: if you've failed twice on a hard problem, consult `brain-astra`
   at `xhigh` with full context rather than retrying the same approach.
+- `brain-astra` is GPT-6 and shares the ChatGPT account with sol/terra/luna, so the
+  vendor guard cannot tell you it is missing: if the router answers `unknown provider
+  for model gpt-6-astra`, that account does not serve GPT-6 yet — fall through to
+  `brain-sol` and tell the user once. Do not retry or guess another model id.
 - Cross-family verification beats same-family repetition: for high-stakes review, prefer
   a consultant from a different vendor than the one that wrote the code.
 - Measured token routing (compression-capabilities H12/H13): response profiles cut output

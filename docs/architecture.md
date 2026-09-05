@@ -62,7 +62,7 @@ ssh/tmux ──► claude  (env: ANTHROPIC_BASE_URL=http://127.0.0.1:8317)
 
 - Parable's original design: the whole session goes through the proxy, agents *are* the
   other models with full tool access.
-- `CLAUDE_CODE_MAX_CONTEXT_TOKENS=372000` caps the context at the smallest window in the
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000` caps the context at the smallest window in the
   cast (the GPT models); the Claude parent uses the `[1m]` model suffix.
 - No Remote Control in this lane — by platform constraint, not choice.
 
