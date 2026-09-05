@@ -17,25 +17,41 @@ command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
   || die "missing required command: sha256sum (or shasum)"
 
 COMMIT="$(pin_get COMMIT)"
-PATCH_SHA256="$(pin_get PATCH_SHA256)"
+SERIES_SHA256="$(pin_get SERIES_SHA256)"
 [ -n "$COMMIT" ] || die "COMMIT missing from PIN"
-[ -n "$PATCH_SHA256" ] || die "PATCH_SHA256 missing from PIN"
+[ -n "$SERIES_SHA256" ] || die "SERIES_SHA256 missing from PIN"
+[ -f "$BRAIN_PATCH_SERIES" ] || die "patch series not found: $BRAIN_PATCH_SERIES"
 
+# sha256 of a file, on either coreutils or BSD.
+file_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# The patches change the binary, so the build stamp has to cover them too:
+# editing a patch must force a rebuild, not silently reuse the old binary.
+BUILD_ID="$COMMIT $SERIES_SHA256"
 STAMP_FILE="$BRAIN_DATA_DIR/proxy/bin/.built-commit"
 if [ "$FORCE" -eq 0 ] && [ -x "$BRAIN_PROXY_BIN" ] && [ -f "$STAMP_FILE" ] \
-  && [ "$(cat "$STAMP_FILE")" = "$COMMIT" ]; then
+  && [ "$(cat "$STAMP_FILE")" = "$BUILD_ID" ]; then
   ok "proxy already built for $COMMIT ($BRAIN_PROXY_BIN)"
   exit 0
 fi
 
-# Verify the vendored patch before touching anything.
-if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$BRAIN_PATCH_FILE" | cut -d' ' -f1)"
-else
-  actual="$(shasum -a 256 "$BRAIN_PATCH_FILE" | cut -d' ' -f1)"
-fi
-[ "$actual" = "$PATCH_SHA256" ] || die "patch checksum mismatch: $actual != $PATCH_SHA256"
-ok "patch checksum verified"
+# Verify the series manifest, then every patch it lists, before touching anything.
+actual="$(file_sha256 "$BRAIN_PATCH_SERIES")"
+[ "$actual" = "$SERIES_SHA256" ] || die "patch series checksum mismatch: $actual != $SERIES_SHA256"
+while read -r want name; do
+  [ -n "$name" ] || continue
+  case "$name" in \#*) continue ;; esac
+  [ -f "$BRAIN_PATCH_DIR/$name" ] || die "patch listed in SERIES is missing: $name"
+  actual="$(file_sha256 "$BRAIN_PATCH_DIR/$name")"
+  [ "$actual" = "$want" ] || die "patch checksum mismatch for $name: $actual != $want"
+done < "$BRAIN_PATCH_SERIES"
+ok "patch series verified ($(grep -c . "$BRAIN_PATCH_SERIES") patches)"
 
 ensure_brain_dirs
 rm -rf "$BRAIN_PROXY_SRC"
@@ -47,10 +63,15 @@ git -C "$BRAIN_PROXY_SRC" checkout --detach "$COMMIT"
 head="$(git -C "$BRAIN_PROXY_SRC" rev-parse HEAD)"
 [ "$head" = "$COMMIT" ] || die "checkout drifted: HEAD=$head expected=$COMMIT"
 
-info "applying claude-effort patch"
-git -C "$BRAIN_PROXY_SRC" \
-  -c user.name=claude-brain -c user.email=build@claude-brain.invalid \
-  am "$BRAIN_PATCH_FILE"
+# Applied in SERIES order — later patches may depend on earlier ones.
+while read -r want name; do
+  [ -n "$name" ] || continue
+  case "$name" in \#*) continue ;; esac
+  info "applying $name"
+  git -C "$BRAIN_PROXY_SRC" \
+    -c user.name=claude-brain -c user.email=build@claude-brain.invalid \
+    am "$BRAIN_PATCH_DIR/$name"
+done < "$BRAIN_PATCH_SERIES"
 
 info "building (this can take a few minutes on a small droplet)"
 mkdir -p "$(dirname "$BRAIN_PROXY_BIN")"
@@ -59,5 +80,5 @@ mkdir -p "$(dirname "$BRAIN_PROXY_BIN")"
 chmod 700 "$BRAIN_PROXY_BIN"
 
 "$BRAIN_PROXY_BIN" --help >/dev/null 2>&1 || warn "binary --help smoke test failed (may still work)"
-printf '%s\n' "$COMMIT" > "$STAMP_FILE"
+printf '%s\n' "$BUILD_ID" > "$STAMP_FILE"
 ok "built $BRAIN_PROXY_BIN"

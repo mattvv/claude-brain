@@ -1,0 +1,141 @@
+From f732a458a95aea82520d5a9eaacdb5e62e6f1149 Mon Sep 17 00:00:00 2001
+From: claude-brain <build@claude-brain.invalid>
+Date: Sat, 5 Sep 2026 06:03:10 +0000
+Subject: [PATCH] registry: add gpt-6-astra to the codex team/plus/pro catalogs
+
+Backport of upstream c77b1369 ('feat(models): add gpt-6-astra model'),
+restricted to the embedded registry catalog and rebased onto the pinned
+commit. claude-brain runs the proxy with --local-model, so a model that is
+absent from the embedded catalog is never registered and every request for
+it fails with 'unknown provider for model gpt-6-astra'.
+
+Only models.json is touched: codex_client_models.json supplies display
+templates for Codex clients and falls back to the default template for an
+unknown id, which is correct for astra.
+
+Tier membership matches upstream exactly: team, plus and pro, not free.
+---
+ internal/registry/models/models.json | 93 ++++++++++++++++++++++++++++
+ 1 file changed, 93 insertions(+)
+
+diff --git a/internal/registry/models/models.json b/internal/registry/models/models.json
+index 86f65d91..1ecca07c 100644
+--- a/internal/registry/models/models.json
++++ b/internal/registry/models/models.json
+@@ -1808,6 +1808,37 @@
+         ]
+       }
+     },
++    {
++      "id": "gpt-6-astra",
++      "object": "model",
++      "created": 1783616400,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Astra",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2003,6 +2034,37 @@
+         ]
+       }
+     },
++    {
++      "id": "gpt-6-astra",
++      "object": "model",
++      "created": 1783616400,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Astra",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2198,6 +2260,37 @@
+         ]
+       }
+     },
++    {
++      "id": "gpt-6-astra",
++      "object": "model",
++      "created": 1783616400,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Astra",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+-- 
+2.43.0
+

@@ -33,7 +33,7 @@ case "$AGENT" in
   brain-*)
     # agent -> credential-record prefix, auth command, human vendor name
     case "$AGENT" in
-      brain-sol|brain-terra|brain-luna) prefix="codex"  cmd="chatgpt" vendor="ChatGPT" ;;
+      brain-astra|brain-sol|brain-terra|brain-luna) prefix="codex"  cmd="chatgpt" vendor="ChatGPT" ;;
       brain-grok)                       prefix="xai"    cmd="grok"    vendor="Grok (X.AI)" ;;
       brain-kimi)                       prefix="kimi"   cmd="kimi"    vendor="Kimi" ;;
       brain-fable)                      prefix="claude" cmd="claude"  vendor="Claude (proxy vendor)" ;;

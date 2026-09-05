@@ -39,7 +39,11 @@ BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-8317}"
 BRAIN_PROXY_URL="http://127.0.0.1:$BRAIN_PROXY_PORT"
 
 BRAIN_PIN_FILE="$BRAIN_REPO_DIR/host/proxy/PIN"
-BRAIN_PATCH_FILE="$BRAIN_REPO_DIR/host/proxy/patches/cliproxyapi-claude-effort.patch"
+# Vendored patches applied on top of the pinned commit. SERIES is a sha256sum-format
+# manifest listing them in apply order; PIN records SERIES's own checksum, so a
+# tampered patch or a reordered series fails the build instead of shipping silently.
+BRAIN_PATCH_DIR="$BRAIN_REPO_DIR/host/proxy/patches"
+BRAIN_PATCH_SERIES="$BRAIN_PATCH_DIR/SERIES"
 PROXY_REPO_URL="https://github.com/router-for-me/CLIProxyAPI.git"
 
 # Colors only when stdout is a terminal.
@@ -524,7 +528,7 @@ usage_reset_human() {
 usage_agent_is_anthropic() {
   case "$1" in
     brain-fable)                              return 0 ;;
-    brain-sol|brain-terra|brain-luna|brain-grok|brain-kimi) return 1 ;;
+    brain-astra|brain-sol|brain-terra|brain-luna|brain-grok|brain-kimi) return 1 ;;
     brain-*)                                  return 1 ;;
     '')                                       return 1 ;;
     *)                                        return 0 ;;
@@ -553,12 +557,12 @@ usage_gate() {
   lanes="$(usage_rank_lanes 2>/dev/null || true)"
 
   local where="Claude subscription at ${headroom}% headroom on ${bind}${resets:+, resets in $resets}"
-  local alt="brain-sol / brain-grok / brain-terra / brain-kimi"
+  local alt="brain-astra / brain-sol / brain-grok / brain-terra / brain-kimi"
   # Name the alternative's actual headroom when we have it — "go use ChatGPT"
   # is far more persuasive with "it is at 98%" attached.
   local cx
   if cx="$(usage_codex_field headroom 2>/dev/null)" && [ "$(usage_codex_state)" != "critical" ]; then
-    alt="brain-sol / brain-terra / brain-luna (ChatGPT is at ${cx}% headroom), or brain-grok / brain-kimi"
+    alt="brain-astra / brain-sol / brain-terra / brain-luna (ChatGPT is at ${cx}% headroom), or brain-grok / brain-kimi"
   fi
 
   if [ "$state" = "tight" ]; then
