@@ -358,6 +358,19 @@ cmd_status() {
   printf '    %s\n' "$(autostart_status | head -1)"
   printf '    %s\n' "$(keepawake_status)"
 
+  printf '%s\n' "${C_BOLD}updates${C_RESET}"
+  if update_check_now; then
+    local behind latest
+    behind="$(update_field behind)"; latest="$(update_field latest)"
+    if [ "${behind:-0}" -gt 0 ]; then
+      step_todo "update available${latest:+: $latest} ($behind new change$([ "$behind" -gt 1 ] && echo s)) — run: brain update"
+    else
+      ok "up to date${latest:+ ($latest)}"
+    fi
+  else
+    step_todo "could not reach GitHub to check for updates"
+  fi
+
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
   if tmux has-session -t brain-rc 2>/dev/null; then
     ok "brain-rc running (attach: brain)"
@@ -1194,6 +1207,19 @@ cmd_update() {
     svc_install proxy
     svc_restart proxy
   fi
+  # Agents and routing are copies taken when a lane starts, so a pull alone
+  # leaves ~/.claude on the old models until the next server restart.
+  if [ -f "$AGENTS_DIR/brain-sol.md" ]; then
+    if grep -q "multi-lane agent" "$AGENTS_DIR/brain-sol.md"; then
+      install_agents "$AGENTS_MULTI_SRC"
+      install_routing "$BRAIN_REPO_DIR/host/claude/routing-multi.md"
+    else
+      install_agents "$AGENTS_RC_SRC"
+      install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
+    fi
+    info "refreshed ~/.claude agents and routing (new sessions pick them up)"
+  fi
+  update_check_now || true
   ok "updated"
 }
 
@@ -1237,11 +1263,12 @@ cmd_uninstall() {
   if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
     local prior=""
     [ -f "$backup" ] && prior="$(jq -r '.statusLine.command // empty' "$backup" 2>/dev/null || true)"
-    jq --arg managed 'model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read' \
+    jq --arg managed 'model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read|update-notice' \
        --arg prior "$prior" '
       def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
       .hooks.PreToolUse = strip(.hooks.PreToolUse)
       | .hooks.PostToolUse = strip(.hooks.PostToolUse)
+      | .hooks.SessionStart = strip(.hooks.SessionStart)
       | if ((.statusLine.command // "") | test("claude-brain|/host/claude/statusline.sh|/droplet/claude/statusline.sh"))
         then (if $prior == "" then del(.statusLine)
               else .statusLine = {type: "command", command: $prior, refreshInterval: 2} end)

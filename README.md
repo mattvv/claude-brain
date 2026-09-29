@@ -143,7 +143,7 @@ Tailscale is also the easiest way to reach a brain at home from a coffee shop.
 | `brain usage` | See how much of each subscription is left, and who can still take work (`override <min>` to spend the reserve anyway) |
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
 | `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
-| `brain update` | Get the latest claude-brain (`brain` also checks at startup and prompts) |
+| `brain update` | Get the latest claude-brain. New sessions (phone included) and the statusline say when one is out, and `brain status` checks on demand |
 | `brain uninstall` | Remove claude-brain and put your Claude Code config back the way it was |
 
 Run them on the brain machine — at its own keyboard, over SSH, or by asking a phone session

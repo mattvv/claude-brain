@@ -152,8 +152,35 @@ else
   printf '  \033[33mskip\033[0m one-true-awk not installed (apt install original-awk)\n'
 fi
 
+echo "== update notice =="
+# Always-on brains start with no terminal, so the SessionStart hook and the
+# statusline are how they hear about releases. A fresh checked_at (or a held
+# lock) keeps the hook from spawning a background fetch against this checkout.
+check "registers the update notice at session start" \
+  'jq -r ".hooks.SessionStart[].hooks[].command" "$H/.claude/settings.json" | grep -q "update-notice.sh"'
+UPD="$H/.local/state/brain/update"; mkdir -p "$UPD"
+printf 'behind=2 latest=v9.9.9 checked_at=%s\n' "$(date +%s)" > "$UPD/available"
+NOTICE="$(echo '{}' | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")"
+check "tells the user when behind" \
+  'printf %s "$NOTICE" | jq -e ".systemMessage | test(\"v9.9.9\") and test(\"brain update\")" >/dev/null'
+check "tells the model to offer the update" \
+  'printf %s "$NOTICE" | jq -e ".hookSpecificOutput.hookEventName == \"SessionStart\"" >/dev/null'
+SL="$(echo '{"model":{"display_name":"m"},"cwd":"/x"}' | HOME="$H" bash "$REPO/host/claude/statusline.sh")"
+check "statusline shows the update"  'printf %s "$SL" | grep -q "brain update v9.9.9"'
+printf 'behind=0 latest=v9.9.9 checked_at=%s\n' "$(date +%s)" > "$UPD/available"
+check "silent when up to date" \
+  '[ -z "$(echo "{}" | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")" ]'
+SL="$(echo '{"model":{"display_name":"m"},"cwd":"/x"}' | HOME="$H" bash "$REPO/host/claude/statusline.sh")"
+check "statusline silent when up to date" '! printf %s "$SL" | grep -q "brain update"'
+printf 'garbage\n' > "$UPD/available"; mkdir -p "$UPD/available.lock"
+check "silent on a malformed record" \
+  '[ -z "$(echo "{}" | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")" ]'
+rmdir "$UPD/available.lock"
+
 echo "== uninstall puts it back =="
 printf 'y\n' | HOME="$H" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
+check "session start hook removed" \
+  '! jq -r ".hooks.SessionStart[]?.hooks[].command" "$H/.claude/settings.json" | grep -q update-notice'
 check "hooks removed"        '[ "$(jq -r ".hooks.PreToolUse | length" "$H/.claude/settings.json")" = "0" ] || ! jq -r ".hooks.PreToolUse[].hooks[].command" "$H/.claude/settings.json" | grep -q model-guard'
 check "their own statusline still theirs" \
   '[ "$(jq -r .statusLine.command "$H/.claude/settings.json")" = "/Users/me/my-statusline.sh" ]'

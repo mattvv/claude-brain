@@ -103,4 +103,17 @@ if [ -r "$usage_summary" ]; then
   fi
 fi
 
+# Update segment. Written by update_check_now (lib/common.sh), refreshed by the
+# SessionStart hook; like the headroom segment, this only reads it.
+update_record="$state/update/available"
+if [ -r "$update_record" ]; then
+  read -r behind latest < <(
+    awk 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"=");v[kv[1]]=kv[2]}
+         print v["behind"]+0, v["latest"]}' "$update_record" 2>/dev/null
+  ) || true
+  if [ "${behind:-0}" -gt 0 ] 2>/dev/null; then
+    line="$line │ ⬆ brain update${latest:+ $latest}"
+  fi
+fi
+
 printf '%s' "$line"
