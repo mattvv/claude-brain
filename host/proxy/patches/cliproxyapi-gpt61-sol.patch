@@ -1,0 +1,143 @@
+From d05db934d9962b7060a7b3adb2ca9cacdbaef7e6 Mon Sep 17 00:00:00 2001
+From: claude-brain <build@claude-brain.invalid>
+Date: Tue, 29 Sep 2026 15:58:42 -0700
+Subject: [PATCH] registry: add gpt-6.1-sol to the codex team/plus/pro catalogs
+
+OpenAI released GPT-6.1 Sol on 2026-09-29 for Plus, Pro, Business,
+Enterprise and Edu accounts in Codex. Upstream has not added it yet, and
+claude-brain runs the proxy with --local-model, so a model that is absent
+from the embedded catalog fails with 'unknown provider for model
+gpt-6.1-sol' before reaching OpenAI.
+
+Values follow the Codex model catalog served to a Business account on
+2026-09-29: 272k context window, text and image input. Tier membership
+matches gpt-6-astra (team, plus, pro, not free). The thinking levels stop
+at max, as they do for astra; the Codex-only 'ultra' level is omitted.
+
+Only models.json is touched: codex_client_models.json falls back to the
+default template for an unknown id.
+---
+ internal/registry/models/models.json | 93 ++++++++++++++++++++++++++++
+ 1 file changed, 93 insertions(+)
+
+diff --git a/internal/registry/models/models.json b/internal/registry/models/models.json
+index 1ecca07c..2439325f 100644
+--- a/internal/registry/models/models.json
++++ b/internal/registry/models/models.json
+@@ -1839,6 +1839,37 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6.1-sol",
++      "object": "model",
++      "created": 1790697600,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.1 Sol",
++      "version": "gpt-6.1",
++      "description": "Latest workhorse model for coding and everyday work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2065,6 +2096,37 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6.1-sol",
++      "object": "model",
++      "created": 1790697600,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.1 Sol",
++      "version": "gpt-6.1",
++      "description": "Latest workhorse model for coding and everyday work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2291,6 +2353,37 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6.1-sol",
++      "object": "model",
++      "created": 1790697600,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.1 Sol",
++      "version": "gpt-6.1",
++      "description": "Latest workhorse model for coding and everyday work.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+-- 
+2.50.1 (Apple Git-155)
+

@@ -22,6 +22,8 @@ Rules:
   vendor guard cannot tell you it is missing: if the router answers `unknown provider
   for model gpt-6-astra`, that account does not serve GPT-6 yet — fall through to
   `brain-sol` and tell the user once. Do not retry or guess another model id.
+- `brain-sol` is GPT-6.1 Sol; on an account without it, the agent itself falls back to
+  gpt-5.6-sol, so keep routing to `brain-sol` as usual.
 - Cross-family verification beats same-family repetition: for high-stakes review, prefer
   a consultant from a different vendor than the one that wrote the code.
 - Measured token routing (compression-capabilities H12/H13): response profiles cut output
