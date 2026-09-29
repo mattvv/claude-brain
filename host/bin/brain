@@ -370,6 +370,11 @@ cmd_status() {
   else
     step_todo "could not reach GitHub to check for updates"
   fi
+  if [ "$(setting_get AUTOUPDATE off)" = on ]; then
+    printf '    %s\n' "auto-update: on (at most daily; log: $(dirname "$BRAIN_UPDATE_FILE")/auto.log)"
+  else
+    printf '    %s\n' "auto-update: off (brain config autoupdate on)"
+  fi
 
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
   if tmux has-session -t brain-rc 2>/dev/null; then
@@ -1092,6 +1097,18 @@ cmd_config() {
         "$(setting_get USAGE_PROBE on)"
       printf '               (brain config usage <advisory|block|off> | reserve <pct>\n'
       printf '                | advisory-at <pct> | ttl <secs> | probe <on|off>)\n'
+      printf '  autoupdate = %s   (brain config autoupdate <on|off>)\n' "$(setting_get AUTOUPDATE off)"
+      ;;
+    autoupdate)
+      case "$val" in
+        '')  printf '%s\n' "$(setting_get AUTOUPDATE off)" ;;
+        on)  setting_set AUTOUPDATE on
+             ok "auto-update on: when a release is out, the brain runs 'brain update' itself"
+             info "at most once a day, only on a clean main checkout, never mid-consultation" ;;
+        off) setting_set AUTOUPDATE off
+             ok "auto-update off: new sessions will say when an update is out" ;;
+        *)   die "usage: brain config autoupdate <on|off>" ;;
+      esac
       ;;
     usage)
       case "$val" in
