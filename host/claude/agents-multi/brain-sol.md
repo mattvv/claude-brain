@@ -1,7 +1,7 @@
 ---
 name: brain-sol
 description: "Long implementation, difficult debugging, or high-recall review."
-model: "gpt-5.6-sol"
+model: "gpt-6.1-sol"
 effort: "xhigh"
 ---
 <!-- claude-brain multi-lane agent. Native model routing via the proxy; use only in 'brain multi' sessions. -->

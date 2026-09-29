@@ -57,7 +57,7 @@ ssh/tmux ──► claude  (env: ANTHROPIC_BASE_URL=http://127.0.0.1:8317)
         cli-proxy-api :8317 ── fans out by model id
                │
     agents-multi/*.md pin models in frontmatter:
-    brain-sol → gpt-5.6-sol, brain-grok → grok-4.5, ...
+    brain-sol → gpt-6.1-sol, brain-grok → grok-4.5, ...
 ```
 
 - Parable's original design: the whole session goes through the proxy, agents *are* the
