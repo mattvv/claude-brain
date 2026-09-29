@@ -120,7 +120,7 @@ if command -v jq >/dev/null 2>&1; then
     *) [ "$PROFILE" = droplet ] || STATUSLINE_MODE=keep ;;
   esac
 
-  MANAGED='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read'
+  MANAGED='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read|update-notice'
   jq --arg hooks "$HOOKS_DIR" \
      --arg statusline "$REPO_DIR/host/claude/statusline.sh" \
      --arg managed "$MANAGED" '
@@ -135,6 +135,9 @@ if command -v jq >/dev/null 2>&1; then
     ])
     | .hooks.PostToolUse = (strip(.hooks.PostToolUse) + [
       {matcher: "*", hooks: [{type: "command", command: ($hooks + "/consult-progress.sh")}]}
+    ])
+    | .hooks.SessionStart = (strip(.hooks.SessionStart) + [
+      {hooks: [{type: "command", command: ($hooks + "/update-notice.sh")}]}
     ])
     | (if $mode == "claim"
        then .statusLine = {type: "command", command: $statusline, refreshInterval: 2}

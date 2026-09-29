@@ -146,6 +146,46 @@ vendor_linked() {
 # deliberately absent: it is what the reserve protects, never a fallback.
 BRAIN_CONSULT_VENDORS="chatgpt grok kimi"
 
+# ---- update availability (shared by the statusline, the session hook, and `brain status`) ----
+# One line, "behind=N latest=vX.Y.Z checked_at=EPOCH", written atomically. The
+# statusline only reads it; always-on brains never see the interactive prompt in
+# check_for_updates, so new sessions refresh it in the background instead.
+BRAIN_UPDATE_FILE="$BRAIN_STATE_DIR/update/available"
+BRAIN_UPDATE_TTL_SECONDS=21600
+
+update_check_now() {
+  local dir behind latest tmp
+  dir="$(dirname "$BRAIN_UPDATE_FILE")"
+  mkdir -p "$dir"
+  run_timeout 20 git -C "$BRAIN_REPO_DIR" fetch --quiet --tags origin main 2>/dev/null || return 1
+  behind="$(git -C "$BRAIN_REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+  latest="$(git -C "$BRAIN_REPO_DIR" describe --tags --abbrev=0 origin/main 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+  tmp="$BRAIN_UPDATE_FILE.tmp.$$"
+  printf 'behind=%s latest=%s checked_at=%s\n' "$behind" "$latest" "$(date +%s)" > "$tmp" \
+    && mv "$tmp" "$BRAIN_UPDATE_FILE"
+}
+
+update_field() {
+  [ -r "$BRAIN_UPDATE_FILE" ] || return 1
+  awk -v k="$1" 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"="); if(kv[1]==k) print kv[2]}}' \
+    "$BRAIN_UPDATE_FILE"
+}
+
+# Refresh in the background when the record is missing or stale. A lock dir keeps
+# concurrent session starts from stacking fetches; a lock older than 2 minutes is
+# from a fetch that died and is taken over.
+update_check_maybe() {
+  local checked lock="$BRAIN_UPDATE_FILE.lock"
+  checked="$(update_field checked_at 2>/dev/null || true)"
+  [ $(( $(date +%s) - ${checked:-0} )) -ge "$BRAIN_UPDATE_TTL_SECONDS" ] || return 0
+  mkdir -p "$(dirname "$BRAIN_UPDATE_FILE")"
+  if [ -d "$lock" ] && [ $(( $(date +%s) - $(file_mtime "$lock") )) -gt 120 ]; then
+    rmdir "$lock" 2>/dev/null || true
+  fi
+  mkdir "$lock" 2>/dev/null || return 0
+  ( update_check_now >/dev/null 2>&1; rmdir "$lock" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+}
+
 # ---- consultation progress (shared by the statusline, hooks, and `brain consult`) ----
 
 BRAIN_CONSULT_DIR="$BRAIN_STATE_DIR/consult"
