@@ -1,7 +1,7 @@
 ---
 name: brain-luna
 description: "Data transforms, scaffolding, test generation, or other bounded mechanical work."
-model: "gpt-5.6-luna"
+model: "gpt-6-luna"
 effort: "medium"
 ---
 <!-- claude-brain multi-lane agent. Native model routing via the proxy; use only in 'brain multi' sessions. -->
