@@ -18,6 +18,28 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 behind="$(update_field behind 2>/dev/null || true)"
 latest="$(update_field latest 2>/dev/null || true)"
+
+# An unattended update (update_auto_maybe) finished since the last session: say
+# so once, whatever the outcome, then forget it.
+auto="$(dirname "$BRAIN_UPDATE_FILE")/auto-result"
+if [ -r "$auto" ]; then
+  result="$(awk 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"="); if(kv[1]=="result") print kv[2]}}' "$auto")"
+  to="$(awk 'NR==1{for(i=1;i<=NF;i++){split($i,kv,"="); if(kv[1]=="to") print kv[2]}}' "$auto")"
+  rm -f "$auto"
+  update_check_maybe
+  if [ "$result" = ok ]; then
+    msg="⬆ claude-brain updated itself${to:+ to $to}"
+    ctx="claude-brain auto-updated itself${to:+ to $to} since the last session. Mention it to the user once."
+  else
+    msg="! claude-brain tried to update itself and failed — run: brain update"
+    ctx="An unattended claude-brain update failed (log: $(dirname "$BRAIN_UPDATE_FILE")/auto.log). Tell the user once and offer to run \`brain update\` and report what it says."
+  fi
+  jq -nc --arg msg "$msg" --arg ctx "$ctx" \
+    '{systemMessage: $msg,
+      hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+  exit 0
+fi
+
 update_check_maybe
 
 case "${behind:-0}" in ''|*[!0-9]*|0) exit 0 ;; esac

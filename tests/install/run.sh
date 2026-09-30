@@ -177,6 +177,38 @@ check "silent on a malformed record" \
   '[ -z "$(echo "{}" | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")" ]'
 rmdir "$UPD/available.lock"
 
+echo "== auto-update is opt-in and careful =="
+# A stand-in checkout whose `brain update` only records that it ran, so the
+# unattended path is exercised without pulling or building anything.
+FAKE="$TMP/fakerepo"; mkdir -p "$FAKE/host/bin"
+printf '#!/bin/sh\necho ran >> "$HOME/auto-ran"\n' > "$FAKE/host/bin/brain"; chmod +x "$FAKE/host/bin/brain"
+git -C "$FAKE" init -q -b main
+git -C "$FAKE" add -A && git -C "$FAKE" -c user.name=t -c user.email=t@t commit -q -m init
+git -C "$FAKE" -c user.name=t -c user.email=t@t tag -a v1.0.0 -m v1.0.0
+auto() { HOME="$H" BRAIN_REPO_DIR="$FAKE" bash -c '. "$1/host/lib/common.sh"; update_auto_maybe' _ "$REPO"; }
+runs() { wc -l < "$H/auto-ran" 2>/dev/null | tr -d ' ' || echo 0; }
+printf 'behind=1 latest=v1.0.1 checked_at=%s\n' "$(date +%s)" > "$UPD/available"
+auto
+check "off by default" '[ ! -e "$H/auto-ran" ]'
+HOME="$H" bash "$REPO/host/bin/brain" config autoupdate on >/dev/null 2>&1
+check "brain config autoupdate on sets it" 'grep -q "^AUTOUPDATE=on" "$H/.config/brain/settings"'
+auto
+check "updates when on and behind" '[ "$(runs)" = 1 ]'
+check "records the outcome" 'grep -q "result=ok from=v1.0.0" "$UPD/auto-result"'
+auto
+check "at most once a day" '[ "$(runs)" = 1 ]'
+rm -f "$UPD/auto-attempted"; echo dirty >> "$FAKE/host/bin/brain"
+auto
+check "skips a checkout with local changes" '[ "$(runs)" = 1 ]'
+git -C "$FAKE" checkout -q -- . && git -C "$FAKE" switch -q -c feature
+auto
+check "skips a checkout off main" '[ "$(runs)" = 1 ]'
+NOTICE="$(echo '{}' | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")"
+check "next session says it updated itself" \
+  'printf %s "$NOTICE" | jq -e ".systemMessage | test(\"updated itself\")" >/dev/null'
+check "and says it only once" '[ ! -e "$UPD/auto-result" ]'
+HOME="$H" bash "$REPO/host/bin/brain" config autoupdate off >/dev/null 2>&1
+
 echo "== uninstall puts it back =="
 printf 'y\n' | HOME="$H" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
 check "session start hook removed" \

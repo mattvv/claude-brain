@@ -183,7 +183,38 @@ update_check_maybe() {
     rmdir "$lock" 2>/dev/null || true
   fi
   mkdir "$lock" 2>/dev/null || return 0
-  ( update_check_now >/dev/null 2>&1; rmdir "$lock" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  ( update_check_now >/dev/null 2>&1; rmdir "$lock" 2>/dev/null; update_auto_maybe ) \
+    </dev/null >/dev/null 2>&1 &
+}
+
+# Opt-in (`brain config autoupdate on`): run `brain update` unattended when behind.
+# At most one attempt a day, stamped before it starts so a slow proxy rebuild is
+# never doubled. Skipped when the checkout is off main or has local changes (a
+# pull would fail or clobber work) and while a consultation runs (the update
+# restarts the proxy under it). The next session start announces the result.
+BRAIN_AUTOUPDATE_INTERVAL_SECONDS=86400
+
+update_auto_maybe() {
+  local dir stamp last behind from to
+  [ "$(setting_get AUTOUPDATE off)" = on ] || return 0
+  behind="$(update_field behind 2>/dev/null || true)"
+  case "${behind:-0}" in ''|*[!0-9]*|0) return 0 ;; esac
+  dir="$(dirname "$BRAIN_UPDATE_FILE")"
+  stamp="$dir/auto-attempted"
+  last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $(( $(date +%s) - last )) -ge "$BRAIN_AUTOUPDATE_INTERVAL_SECONDS" ] || return 0
+  [ "$(git -C "$BRAIN_REPO_DIR" symbolic-ref --short HEAD 2>/dev/null)" = main ] || return 0
+  [ -z "$(git -C "$BRAIN_REPO_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 0
+  pgrep -f 'brain-ask ' >/dev/null 2>&1 && return 0
+  date +%s > "$stamp"
+  from="$(git -C "$BRAIN_REPO_DIR" describe --tags --abbrev=0 HEAD 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+  if "$BRAIN_REPO_DIR/host/bin/brain" update </dev/null > "$dir/auto.log" 2>&1; then
+    to="$(git -C "$BRAIN_REPO_DIR" describe --tags --abbrev=0 HEAD 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+    printf 'result=ok from=%s to=%s at=%s\n' "$from" "$to" "$(date +%s)" > "$dir/auto-result"
+  else
+    printf 'result=failed from=%s to= at=%s\n' "$from" "$(date +%s)" > "$dir/auto-result"
+  fi
 }
 
 # ---- consultation progress (shared by the statusline, hooks, and `brain consult`) ----
