@@ -273,6 +273,9 @@ claude_bin() {
     command -v claude
   elif [ -x "$HOME/.local/bin/claude" ]; then
     printf '%s\n' "$HOME/.local/bin/claude"
+  elif [ -x "${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/claude" ]; then
+    # launchd/systemd services get a fixed PATH without mise's shims.
+    printf '%s\n' "${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/claude"
   else
     return 1
   fi
