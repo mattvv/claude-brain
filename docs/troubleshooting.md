@@ -61,7 +61,7 @@ ssh -t -L 1455:localhost:1455 claude-brain 'bash -lc "brain auth chatgpt --brows
 
 It prints a URL — open it in your laptop's browser and sign in. The login's callback
 comes back through the SSH tunnel to the droplet and the credential lands there
-directly. Verify from the droplet: `brain-ask gpt-5.6-luna "say ok"`.
+directly. Verify from the droplet: `brain-ask gpt-6-luna "say ok"`.
 
 (If you already have a working credential from another CLIProxyAPI-based setup, copying
 its `codex-*.json` into the droplet's `~/.cli-proxy-api/` and restarting the router with

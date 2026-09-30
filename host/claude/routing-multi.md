@@ -25,12 +25,11 @@ Rules:
   directly instead.
 - Match effort to difficulty by choosing the lane, not by inflating the task: trivial
   work goes to `brain-luna`, not to `brain-astra` with a bigger prompt.
-- `brain-astra` is GPT-6 on the same ChatGPT account as sol/terra/luna, so the vendor
-  guard cannot flag it as unlinked: if dispatch fails with `unknown provider for model
-  gpt-6-astra`, that account does not serve GPT-6 yet — use `brain-sol` instead.
-- `brain-sol` is GPT-6.1 Sol, also on that account: if dispatch fails with `unknown
-  provider for model gpt-6.1-sol` or "not supported", use `brain-astra` for that task,
-  or `brain-terra` if astra fails too.
+- `brain-astra` and `brain-luna` are GPT-6 and `brain-sol` is GPT-6.1; `brain-terra` is
+  still GPT-5.6 (GPT-6 has no terra). They share one ChatGPT account, so the vendor guard
+  cannot flag them as unlinked: if dispatch fails with `unknown provider for model
+  gpt-6...` or "not supported", that account does not serve the model yet — use
+  `brain-terra` or `brain-grok` for that task instead.
 - Review by a different family than the author when the stakes are high.
 - Routing preference is subject to live subscription headroom: `brain usage` shows what is
   left. As Claude headroom falls, push implementation and bulk reading through a consultant

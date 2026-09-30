@@ -241,7 +241,7 @@ What it does:
 - **Navigate instead of read.** `brain explore "how does X flow through the system"` sends a
   small, locally-gathered pack to a *cheap* model and returns one dense, cited answer — so the
   expensive brain never reads a pile of files just to orient itself. The cheap model is a
-  configurable fallback chain (`[explore] models`, default `gpt-5.6-luna,grok-4.5`).
+  configurable fallback chain (`[explore] models`, default `gpt-6-luna,grok-4.5`).
 - **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
   *paths* (`brain-ask --context-file`) so the file bytes never fill the brain's *own* context
   twice, and it can ask the consultant for a terser answer (`--response debug|concise|…`) at the

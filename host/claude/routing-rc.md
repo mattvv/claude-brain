@@ -18,12 +18,12 @@ Rules:
   `xhigh` — handle it yourself or use `brain-luna --effort low`.
 - Escalate, don't spin: if you've failed twice on a hard problem, consult `brain-astra`
   at `xhigh` with full context rather than retrying the same approach.
-- `brain-astra` is GPT-6 and shares the ChatGPT account with sol/terra/luna, so the
-  vendor guard cannot tell you it is missing: if the router answers `unknown provider
+- `brain-astra` and `brain-luna` are GPT-6 and `brain-sol` is GPT-6.1; `brain-terra` is
+  still GPT-5.6 (GPT-6 has no terra). They share one ChatGPT account, so the vendor guard
+  cannot tell you a model is missing. `brain-sol` and `brain-luna` fall back to GPT-5.6 on
+  their own, so keep routing to them as usual. If `brain-astra` reports `unknown provider
   for model gpt-6-astra`, that account does not serve GPT-6 yet — fall through to
   `brain-sol` and tell the user once. Do not retry or guess another model id.
-- `brain-sol` is GPT-6.1 Sol; on an account without it, the agent itself falls back to
-  gpt-5.6-sol, so keep routing to `brain-sol` as usual.
 - Cross-family verification beats same-family repetition: for high-stakes review, prefer
   a consultant from a different vendor than the one that wrote the code.
 - Measured token routing (compression-capabilities H12/H13): response profiles cut output

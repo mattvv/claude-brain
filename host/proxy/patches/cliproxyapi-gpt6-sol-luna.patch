@@ -1,0 +1,236 @@
+From 93a6a816b3888123d87db025347bdbdb466009eb Mon Sep 17 00:00:00 2001
+From: claude-brain <build@claude-brain.invalid>
+Date: Tue, 22 Sep 2026 19:36:50 +0000
+Subject: [PATCH] registry: add gpt-6-sol and gpt-6-luna to the codex
+ team/plus/pro catalogs
+
+Backport of upstream 24303543 ('feat(registry): update model definitions and
+bump codex client version to 0.155.0'), restricted to the two new GPT-6 Codex
+models in the embedded registry catalog and rebased onto the pinned commit.
+claude-brain runs the proxy with --local-model, so a model absent from the
+embedded catalog is never registered and every request for it fails with
+'unknown provider for model gpt-6-sol'.
+
+Only models.json is touched, and only the fields the pinned schema already
+uses: upstream's newer 'native_capabilities' key is omitted because no entry
+in the pinned catalog carries it.
+
+Tier membership and metadata match upstream exactly: team, plus and pro.
+---
+ internal/registry/models/models.json | 186 +++++++++++++++++++++++++++
+ 1 file changed, 186 insertions(+)
+
+diff --git a/internal/registry/models/models.json b/internal/registry/models/models.json
+index 2439325f..29181d42 100644
+--- a/internal/registry/models/models.json
++++ b/internal/registry/models/models.json
+@@ -1870,6 +1870,68 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6-sol",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Sol",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Sol Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
++    {
++      "id": "gpt-6-luna",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Luna",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Luna Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2127,6 +2189,68 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6-sol",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Sol",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Sol Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
++    {
++      "id": "gpt-6-luna",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Luna",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Luna Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+@@ -2384,6 +2508,68 @@
+         "text"
+       ]
+     },
++    {
++      "id": "gpt-6-sol",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Sol",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Sol Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
++    {
++      "id": "gpt-6-luna",
++      "object": "model",
++      "created": 1790035200,
++      "owned_by": "openai",
++      "type": "openai",
++      "display_name": "GPT 6.0 Luna",
++      "version": "gpt-6.0",
++      "description": "GPT-6 Luna Codex model.",
++      "context_length": 272000,
++      "max_completion_tokens": 128000,
++      "supported_parameters": [
++        "tools"
++      ],
++      "thinking": {
++        "levels": [
++          "low",
++          "medium",
++          "high",
++          "xhigh",
++          "max"
++        ]
++      },
++      "supportedInputModalities": [
++        "text",
++        "image"
++      ],
++      "supportedOutputModalities": [
++        "text"
++      ]
++    },
+     {
+       "id": "gpt-5.6-sol",
+       "object": "model",
+-- 
+2.50.1 (Apple Git-155)
+

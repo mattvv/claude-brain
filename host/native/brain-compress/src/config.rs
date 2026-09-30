@@ -73,7 +73,7 @@ impl Config {
             bash_read_head_lines: DEFAULT_BASH_READ_HEAD_LINES,
             dedup_enabled: true,
             dedup_window_hours: 8,
-            explore_models: vec!["gpt-5.6-luna".to_string(), "grok-4.5".to_string()],
+            explore_models: vec!["gpt-6-luna".to_string(), "grok-4.5".to_string()],
             explore_effort: "low".to_string(),
             explore_max_pack_bytes: 96 * 1024,
             symbols_max_results: 200,

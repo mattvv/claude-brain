@@ -185,7 +185,10 @@ printf '#!/bin/sh\necho ran >> "$HOME/auto-ran"\n' > "$FAKE/host/bin/brain"; chm
 git -C "$FAKE" init -q -b main
 git -C "$FAKE" add -A && git -C "$FAKE" -c user.name=t -c user.email=t@t commit -q -m init
 git -C "$FAKE" -c user.name=t -c user.email=t@t tag -a v1.0.0 -m v1.0.0
-auto() { HOME="$H" BRAIN_REPO_DIR="$FAKE" bash -c '. "$1/host/lib/common.sh"; update_auto_maybe' _ "$REPO"; }
+# pgrep answers "no consultation running" so a real brain-ask on this machine
+# cannot make the idle guard skip every case.
+IDLE="$TMP/idle"; mkdir -p "$IDLE"; printf '#!/bin/sh\nexit 1\n' > "$IDLE/pgrep"; chmod +x "$IDLE/pgrep"
+auto() { HOME="$H" BRAIN_REPO_DIR="$FAKE" PATH="$IDLE:$PATH" bash -c '. "$1/host/lib/common.sh"; update_auto_maybe' _ "$REPO"; }
 runs() { wc -l < "$H/auto-ran" 2>/dev/null | tr -d ' ' || echo 0; }
 printf 'behind=1 latest=v1.0.1 checked_at=%s\n' "$(date +%s)" > "$UPD/available"
 auto
@@ -203,6 +206,10 @@ check "skips a checkout with local changes" '[ "$(runs)" = 1 ]'
 git -C "$FAKE" checkout -q -- . && git -C "$FAKE" switch -q -c feature
 auto
 check "skips a checkout off main" '[ "$(runs)" = 1 ]'
+git -C "$FAKE" switch -q main; rm -f "$UPD/auto-attempted"
+printf '#!/bin/sh\nexit 0\n' > "$IDLE/pgrep"
+auto
+check "skips while a consultation runs" '[ "$(runs)" = 1 ]'
 NOTICE="$(echo '{}' | HOME="$H" "$REPO/host/claude/hooks/update-notice.sh")"
 check "next session says it updated itself" \
   'printf %s "$NOTICE" | jq -e ".systemMessage | test(\"updated itself\")" >/dev/null'
@@ -210,7 +217,14 @@ check "and says it only once" '[ ! -e "$UPD/auto-result" ]'
 HOME="$H" bash "$REPO/host/bin/brain" config autoupdate off >/dev/null 2>&1
 
 echo "== uninstall puts it back =="
-printf 'y\n' | HOME="$H" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
+# launchd and systemd --user are keyed by uid, not HOME: a real launchctl here
+# would boot out the services of whatever brain runs on this machine.
+SVC_STUB="$TMP/svcstub"; mkdir -p "$SVC_STUB"
+for tool in launchctl systemctl loginctl; do
+  printf '#!/bin/sh\necho "$0 $*" >> "%s/calls"\nexit 0\n' "$SVC_STUB" > "$SVC_STUB/$tool"
+  chmod +x "$SVC_STUB/$tool"
+done
+printf 'y\n' | HOME="$H" PATH="$SVC_STUB:$PATH" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
 check "session start hook removed" \
   '! jq -r ".hooks.SessionStart[]?.hooks[].command" "$H/.claude/settings.json" | grep -q update-notice'
 check "hooks removed"        '[ "$(jq -r ".hooks.PreToolUse | length" "$H/.claude/settings.json")" = "0" ] || ! jq -r ".hooks.PreToolUse[].hooks[].command" "$H/.claude/settings.json" | grep -q model-guard'
