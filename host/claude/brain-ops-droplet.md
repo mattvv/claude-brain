@@ -38,6 +38,13 @@ and starts a Remote Control server for that repo — its sessions then appear in
 Claude app). `brain repo ls` shows what's set up; `brain repo stop <name>` ends one.
 Run these detached (the server lives in tmux), then confirm with `brain repo ls`.
 
+**Separate accounts per repo** (e.g. a work Claude + ChatGPT): `brain account add <name>`
+creates an isolated set of logins with its own router; link it with
+`brain auth start|check chatgpt --account <name>` (and `brain auth anthropic --account <name>`,
+which is interactive — hand that one to the user), then `brain repo add <owner/name>
+--account <name>`. `brain account ls` shows every set. Never move a repo between sets or
+link a vendor into a set without the user saying which account it is.
+
 **Adjust brain defaults on request**: `brain config` shows the user's settings. If they
 ask to watch consultants work live (or to stop watching), run
 `brain config consult <foreground|background>` — it updates the CLAUDE.md guidance for

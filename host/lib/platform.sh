@@ -315,9 +315,17 @@ BRAIN_LAUNCHD_DIR="${BRAIN_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}"
 BRAIN_SYSTEMD_DIR="${BRAIN_SYSTEMD_DIR:-$HOME/.config/systemd/user}"
 
 # Map a brain service name to its platform-native unit id.
+# An account set's proxy is the instance service "proxy@<account>" (see
+# BRAIN_ACCOUNT in common.sh): a systemd template instance on Linux, a
+# per-account label on macOS.
 svc_unit_id() {
   case "$(brain_os)" in
-    macos) printf 'sh.claude-brain.%s\n' "$1" ;;
+    macos)
+      case "$1" in
+        proxy@*) printf 'sh.claude-brain.proxy-%s\n' "${1#proxy@}" ;;
+        *)       printf 'sh.claude-brain.%s\n' "$1" ;;
+      esac
+      ;;
     *)     printf '%s\n' "$(svc_systemd_unit "$1")" ;;
   esac
 }
@@ -325,6 +333,7 @@ svc_unit_id() {
 svc_systemd_unit() {
   case "$1" in
     proxy) printf 'cli-proxy-api\n' ;;
+    proxy@*) printf 'cli-proxy-api@%s\n' "${1#proxy@}" ;;
     rc)    printf 'brain-rc\n' ;;
     watchdog) printf 'brain-watchdog\n' ;;
     *)     printf '%s\n' "$1" ;;
@@ -339,12 +348,16 @@ svc_install() {
   case "$(brain_os)" in
     macos)
       label="$(svc_unit_id "$name")"
-      src="$BRAIN_REPO_DIR/host/service/launchd/$label.plist.tmpl"
+      case "$name" in
+        proxy@*) src="$BRAIN_REPO_DIR/host/service/launchd/sh.claude-brain.proxy-account.plist.tmpl" ;;
+        *)       src="$BRAIN_REPO_DIR/host/service/launchd/$label.plist.tmpl" ;;
+      esac
       dst="$BRAIN_LAUNCHD_DIR/$label.plist"
       [ -f "$src" ] || { printf 'missing service template: %s\n' "$src" >&2; return 1; }
       mkdir -p "$BRAIN_LAUNCHD_DIR" "$BRAIN_STATE_DIR/log"
       sed -e "s|__HOME__|$HOME|g" \
           -e "s|__LABEL__|$label|g" \
+          -e "s|__ACCOUNT__|${name#proxy@}|g" \
           -e "s|__BRAIN_BIN__|$HOME/.local/bin|g" \
           -e "s|__PATH__|$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin|g" \
           "$src" > "$dst"
@@ -352,8 +365,12 @@ svc_install() {
       launchctl bootstrap "gui/$(id -u)" "$dst"
       ;;
     *)
-      src="$BRAIN_REPO_DIR/host/service/systemd/$(svc_systemd_unit "$name").service"
-      dst="$BRAIN_SYSTEMD_DIR/$(svc_systemd_unit "$name").service"
+      # Instance units ("cli-proxy-api@work") share one template file.
+      local file
+      file="$(svc_systemd_unit "$name")"
+      case "$file" in *@*) file="${file%%@*}@" ;; esac
+      src="$BRAIN_REPO_DIR/host/service/systemd/$file.service"
+      dst="$BRAIN_SYSTEMD_DIR/$file.service"
       [ -f "$src" ] || { printf 'missing service unit: %s\n' "$src" >&2; return 1; }
       mkdir -p "$BRAIN_SYSTEMD_DIR"
       cp "$src" "$dst"
@@ -401,7 +418,14 @@ svc_uninstall() {
     *)
       systemctl --user disable --now "$(svc_systemd_unit "$1").timer" 2>/dev/null || true
       systemctl --user disable "$(svc_systemd_unit "$1")" 2>/dev/null || true
-      rm -f "$BRAIN_SYSTEMD_DIR/$(svc_systemd_unit "$1")".{service,timer}
+      # A template is shared by every instance; only drop it with the last one.
+      case "$1" in
+        proxy@*)
+          ls "$BRAIN_SYSTEMD_DIR"/default.target.wants/cli-proxy-api@*.service >/dev/null 2>&1 \
+            || rm -f "$BRAIN_SYSTEMD_DIR/cli-proxy-api@.service"
+          ;;
+        *) rm -f "$BRAIN_SYSTEMD_DIR/$(svc_systemd_unit "$1")".{service,timer} ;;
+      esac
       systemctl --user daemon-reload 2>/dev/null || true
       ;;
   esac

@@ -117,6 +117,36 @@ A pinned, patched build of
 - Runs as a systemd **user** service (`host/systemd/cli-proxy-api.service`) with
   `Restart=always`; `loginctl enable-linger` keeps it alive without a login session.
 
+## Account sets
+
+A machine can carry several sets of logins — typically a personal and a work Claude +
+ChatGPT. `BRAIN_ACCOUNT` (default `default`) selects one, and `lib/common.sh` resolves
+every path for it once:
+
+| | `default` | extra set `<name>` |
+|---|---|---|
+| Claude config | `~/.claude`, `~/.claude.json` | `CLAUDE_CONFIG_DIR=~/.claude-<name>` (holds its own `.claude.json`) |
+| Proxy logins | `~/.cli-proxy-api` | `~/.cli-proxy-api-<name>` |
+| Token, proxy config | `~/.config/brain/` | `~/.config/brain/accounts/<name>/` (+ `account`: `PORT=`) |
+| Router | `cli-proxy-api` on 8317 | `cli-proxy-api@<name>` (launchd `…proxy-<name>`) from 8318 up |
+| Usage cache | `~/.local/state/brain/usage` | `~/.local/state/brain/accounts/<name>/usage` |
+
+Each set gets its own router process rather than sharing one: CLIProxyAPI round-robins
+every credential in its auth-dir, so two ChatGPT logins in one directory would bill work
+to either account at random. Settings (`~/.config/brain/settings`) stay shared — they are
+preferences, not identities.
+
+`brain --account <name> …` re-execs with `BRAIN_ACCOUNT` set, so nothing switches sets
+mid-process. `~/.config/brain/repo-accounts` pins repos (`name=set`); `repo serve` always
+re-execs into the pinned set, even from inside another set's session. RC servers launch
+through `claude_account_env`, which sets `BRAIN_ACCOUNT`, `CLAUDE_CONFIG_DIR`,
+`BRAIN_PROXY_URL` and `BRAIN_TOKEN_FILE` explicitly (and for `default`, *unsets*
+`CLAUDE_CONFIG_DIR`, because a tmux server first started from a work session would
+otherwise pass the work login to every later session). Hooks, the statusline and
+`brain-ask` inherit that environment. An unknown set resolves to port 0, so a mistake
+fails closed instead of reaching another set's router. Contract tests:
+`tests/accounts/run.sh`.
+
 ## Routing intelligence
 
 The proxy itself is dumb fan-out; task→model routing lives a layer up (parable's design):
