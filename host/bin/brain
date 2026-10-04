@@ -843,6 +843,11 @@ vendor_login_flags() {
 
 # vendor_record_prefix / vendor_linked live in lib/common.sh (shared with the hooks).
 
+# " --account NAME" for follow-up hints when running in an extra set.
+account_flag() {
+  [ "$BRAIN_ACCOUNT" = default ] || printf ' --account %s' "$BRAIN_ACCOUNT"
+}
+
 cmd_auth_start() {
   local vendor="$1" flags log
   flags="$(vendor_login_flags "$vendor")" || die "unknown vendor: $vendor"
@@ -877,10 +882,10 @@ cmd_auth_start() {
     # Device-style flow: completes on its own once approved.
     grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log" | head -1 \
       | sed 's/^/  device code: /' || true
-    info "then run: brain auth check $vendor"
+    info "then run: brain auth check $vendor$(account_flag)"
   else
     info "after approving, the browser lands on a localhost address that won't load —"
-    info "copy that address and run: brain auth paste $vendor '<that-url>'"
+    info "copy that address and run: brain auth paste $vendor '<that-url>'$(account_flag)"
   fi
 }
 
