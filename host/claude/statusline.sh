@@ -79,6 +79,11 @@ fi
 # Shown only when it is actionable — silent at healthy headroom, and silent when
 # the sample is missing, unparseable, or older than the window it describes.
 usage_summary="$state/usage/summary.txt"
+# An extra account set keeps its own usage cache (see BRAIN_ACCOUNT in common.sh).
+case "${BRAIN_ACCOUNT:-default}" in
+  default) ;;
+  *) usage_summary="$state/accounts/$BRAIN_ACCOUNT/usage/summary.txt" ;;
+esac
 if [ -r "$usage_summary" ]; then
   # -1 when the key is absent: a truncated summary must read as "no data", not
   # as 0% headroom, which would falsely announce an exhausted subscription.

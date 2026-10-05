@@ -10,10 +10,27 @@ set -euo pipefail
 BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 NATIVE="$BRAIN_DATA_DIR/native/current/brain-compress"
 
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+# Resolve the account set here rather than trusting an inherited token/URL pair:
+# BRAIN_ACCOUNT is the one source of truth (see lib/common.sh).
+# shellcheck source=../lib/common.sh
+. "$DIR/../lib/common.sh"
+[ "$BRAIN_ACCOUNT" != __invalid__ ] || exit 2
+export BRAIN_PROXY_URL BRAIN_TOKEN_FILE
+
+# Native builds before 0.4.2 always read ~/.config/brain/token, so inside an
+# extra account set they would present the default set's token to this set's
+# proxy. The Bash implementation resolves the set itself.
+if [ "$BRAIN_ACCOUNT" != default ]; then
+  case "$(cat "$BRAIN_DATA_DIR/native/current/VERSION" 2>/dev/null)" in
+    0.[0-3].*|0.4.[01]|"") BRAIN_ASK_LEGACY=1 ;;
+  esac
+fi
+
 if [ -z "${BRAIN_ASK_LEGACY:-}" ] && [ -x "$NATIVE" ]; then
   # argv[0]=brain-ask so the statusline's `pgrep -f 'brain-ask '` still matches.
   exec -a brain-ask "$NATIVE" "$@"
 fi
 
-DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 exec "$DIR/../libexec/legacy/brain-ask" "$@"

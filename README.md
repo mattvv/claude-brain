@@ -160,6 +160,7 @@ shows what came and went.
 |---|---|
 | `brain` | Start/attach the phone-control server (spawn as many sessions as you like from the app) |
 | `brain repo add <owner/name>` | Clone one of your GitHub repos and serve phone sessions for it (`repo ls` / `repo serve` / `repo stop`) — or just ask your brain to do it |
+| `brain account add <name>` | A second set of logins (say, your work Claude + ChatGPT) kept fully apart from your own — then `brain auth anthropic --account <name>`, `brain auth chatgpt --account <name>` and `brain repo add <owner/name> --account <name>`. See [Work and personal accounts](#work-and-personal-accounts) |
 | `brain status` | Health check: host, router, linked accounts, sessions |
 | `brain autostart enable` | Come back automatically after a reboot, and restart the server within a minute if it dies (e.g. after a long sleep) — `disable` / `status` |
 | `brain teleport <machine>` | Move this session — conversation, branch and uncommitted work — to the brain on another machine ([details](#moving-a-session-to-another-brain-teleport)) |
@@ -173,6 +174,28 @@ shows what came and went.
 | `brain update` | Get the latest claude-brain. New sessions (phone included) and the statusline say when one is out, and `brain status` checks on demand |
 | `brain config autoupdate on` | Let the brain install releases itself: at most once a day, only on a clean `main` checkout, never mid-consultation. The next session says it updated |
 | `brain uninstall` | Remove claude-brain and put your Claude Code config back the way it was |
+
+### Work and personal accounts
+
+One brain can hold more than one set of logins. Your own Claude and ChatGPT stay the
+`default` set; an extra set — say `work` — gets its own Claude login, its own ChatGPT/Grok/
+Kimi links, its own router process, token and port, and its own usage numbers. Repos are
+pinned to a set, so a work repo's phone sessions run on the work Claude account and its
+`brain-*` consultants bill the work ChatGPT account — never yours, and never by accident.
+
+```sh
+brain account add work                         # router + ~/.claude-work, ready for logins
+brain auth anthropic --account work            # sign in to the work Claude account
+brain auth chatgpt --account work              # and its ChatGPT account
+brain repo add my-org/core --account work      # clone + serve, pinned to work
+brain account ls                               # every set, its logins and its repos
+```
+
+Any command takes `--account <name>` (`brain status --account work`, `brain usage
+--account work`). `brain repo serve` remembers each repo's set. The new set starts with a
+copy of your own `~/.claude/CLAUDE.md` instructions and links to your skills; MCP servers,
+plugins and connectors belong to an account, so add the work ones in a work session.
+In the Claude app, work sessions show up under the work Claude account.
 
 Run them on the brain machine — at its own keyboard, over SSH, or by asking a phone session
 to run them for you.

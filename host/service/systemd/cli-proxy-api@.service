@@ -1,0 +1,17 @@
+[Unit]
+Description=CLIProxyAPI multi-provider proxy for account set %i (claude-brain)
+After=network-online.target
+
+[Service]
+# One proxy per extra account set, each with its own auth-dir, token and port
+# (installed by `brain account add`), so one set's logins never serve another's.
+ExecStart=%h/.local/share/brain/proxy/bin/cli-proxy-api --config %h/.config/brain/accounts/%i/proxy-config.yaml --local-model
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

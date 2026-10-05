@@ -24,7 +24,15 @@ pub fn state_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".local/state/brain"))
 }
 
+/// The proxy bearer token. `BRAIN_TOKEN_FILE` selects an account set's token
+/// (sessions for an extra set export it alongside `BRAIN_PROXY_URL`); the
+/// default set keeps the historical path.
 pub fn token_path() -> Result<PathBuf, String> {
+    if let Some(value) = env::var_os("BRAIN_TOKEN_FILE") {
+        if !value.is_empty() {
+            return make_absolute(PathBuf::from(value));
+        }
+    }
     Ok(home_dir()?.join(".config/brain/token"))
 }
 

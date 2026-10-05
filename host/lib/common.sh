@@ -28,15 +28,133 @@ BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$(cd -P "$BRAIN_LIB_DIR/../.." && pwd)}"
 BRAIN_CONFIG_DIR="${BRAIN_CONFIG_DIR:-$HOME/.config/brain}"
 BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 BRAIN_STATE_DIR="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
-BRAIN_AUTH_DIR="${BRAIN_AUTH_DIR:-$HOME/.cli-proxy-api}"
-
-BRAIN_TOKEN_FILE="$BRAIN_CONFIG_DIR/token"
 BRAIN_SETTINGS_FILE="$BRAIN_CONFIG_DIR/settings"
-BRAIN_PROXY_CONFIG="$BRAIN_CONFIG_DIR/proxy-config.yaml"
 BRAIN_PROXY_SRC="$BRAIN_DATA_DIR/proxy/src"
 BRAIN_PROXY_BIN="$BRAIN_DATA_DIR/proxy/bin/cli-proxy-api"
-BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-8317}"
+
+# ---- account sets ----
+# One machine can hold several sets of logins — say a personal Claude + ChatGPT
+# and a work Claude + ChatGPT. "default" is the original layout and is unchanged.
+# Every other set gets its own Claude config dir (CLAUDE_CONFIG_DIR), proxy
+# auth-dir, token, port, usage cache and proxy process, so one set's credentials
+# can never serve another set's request: the proxy round-robins every record in
+# its auth-dir, so sharing one would bill work at random to either account.
+# BRAIN_ACCOUNT selects the set. RC servers export it into their sessions, so the
+# hooks, statusline and brain-ask inside a session resolve the same set.
+BRAIN_ACCOUNT="${BRAIN_ACCOUNT:-default}"
+BRAIN_ACCOUNTS_DIR="$BRAIN_CONFIG_DIR/accounts"
+BRAIN_REPO_ACCOUNTS="$BRAIN_CONFIG_DIR/repo-accounts"
+BRAIN_ACCOUNT_BASE_PORT=8318
+
+# Account names become paths, unit names and tmux names: keep them boring.
+account_name_ok() {
+  case "$1" in
+    # Spelled out: bash 3.2 (macOS) collates [a-z] by locale, so it admits
+    # uppercase, and on a case-insensitive disk "Work" would clobber "work".
+    ''|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 32 ]
+}
+
+if ! account_name_ok "$BRAIN_ACCOUNT"; then
+  printf 'invalid BRAIN_ACCOUNT %s (use a-z, 0-9 and -)\n' "$BRAIN_ACCOUNT" >&2
+  BRAIN_ACCOUNT=__invalid__
+fi
+
+if [ "$BRAIN_ACCOUNT" = default ]; then
+  BRAIN_ACCOUNT_DIR="$BRAIN_CONFIG_DIR"
+  BRAIN_ACCOUNT_STATE_DIR="$BRAIN_STATE_DIR"
+  BRAIN_AUTH_DIR="${BRAIN_AUTH_DIR:-$HOME/.cli-proxy-api}"
+  BRAIN_CLAUDE_DIR="$HOME/.claude"
+  BRAIN_CLAUDE_JSON="$HOME/.claude.json"
+  BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-8317}"
+  BRAIN_ACCOUNT_TAG=""
+else
+  # Deliberately not overridable piecemeal: an inherited BRAIN_AUTH_DIR or
+  # BRAIN_PROXY_PORT from another set must not leak into this one.
+  BRAIN_ACCOUNT_DIR="$BRAIN_ACCOUNTS_DIR/$BRAIN_ACCOUNT"
+  BRAIN_ACCOUNT_STATE_DIR="$BRAIN_STATE_DIR/accounts/$BRAIN_ACCOUNT"
+  BRAIN_AUTH_DIR="$HOME/.cli-proxy-api-$BRAIN_ACCOUNT"
+  BRAIN_CLAUDE_DIR="$HOME/.claude-$BRAIN_ACCOUNT"
+  # With CLAUDE_CONFIG_DIR set, Claude Code keeps .claude.json inside it.
+  BRAIN_CLAUDE_JSON="$BRAIN_CLAUDE_DIR/.claude.json"
+  BRAIN_PROXY_PORT=""
+  [ -f "$BRAIN_ACCOUNT_DIR/account" ] && BRAIN_PROXY_PORT="$(sed -n 's/^PORT=//p' "$BRAIN_ACCOUNT_DIR/account" | tail -1)"
+  # Unknown set: port 0 makes every proxy call fail closed instead of reaching
+  # some other set's proxy.
+  BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-0}"
+  BRAIN_ACCOUNT_TAG="-$BRAIN_ACCOUNT"
+fi
+export BRAIN_TOKEN_FILE="$BRAIN_ACCOUNT_DIR/token"
+BRAIN_PROXY_CONFIG="$BRAIN_ACCOUNT_DIR/proxy-config.yaml"
 BRAIN_PROXY_URL="http://127.0.0.1:$BRAIN_PROXY_PORT"
+
+account_exists() {
+  [ "$1" = default ] || [ -f "$BRAIN_ACCOUNTS_DIR/$1/account" ]
+}
+
+# Every configured set, default first.
+account_list() {
+  local d
+  printf 'default\n'
+  for d in "$BRAIN_ACCOUNTS_DIR"/*/; do
+    [ -f "$d/account" ] && basename "$d"
+  done
+  return 0
+}
+
+# True when the repo has an explicit pin (exact name match, not a regex).
+repo_account_pinned() {
+  [ -f "$BRAIN_REPO_ACCOUNTS" ] && awk -F= -v n="$1" '$1==n{f=1} END{exit !f}' "$BRAIN_REPO_ACCOUNTS"
+}
+
+# Which set a `brain repo` checkout uses (default when never assigned).
+repo_account_get() {
+  local a=""
+  [ -f "$BRAIN_REPO_ACCOUNTS" ] && a="$(awk -F= -v n="$1" '$1==n{v=$2} END{print v}' "$BRAIN_REPO_ACCOUNTS")"
+  printf '%s\n' "${a:-default}"
+}
+
+repo_account_set() {
+  local tmp
+  mkdir -p "$BRAIN_CONFIG_DIR"
+  tmp="$(mktemp)"
+  [ -f "$BRAIN_REPO_ACCOUNTS" ] && awk -F= -v n="$1" '$1!=n' "$BRAIN_REPO_ACCOUNTS" > "$tmp"
+  [ "$2" = default ] || printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  mv "$tmp" "$BRAIN_REPO_ACCOUNTS"
+}
+
+# The service name of this set's proxy (see svc_systemd_unit / svc_unit_id).
+proxy_svc() {
+  if [ "$BRAIN_ACCOUNT" = default ]; then echo proxy; else echo "proxy@$BRAIN_ACCOUNT"; fi
+}
+
+# Environment a Claude process for this set is launched with. The default set
+# scrubs CLAUDE_CONFIG_DIR too: a tmux server first started from a work session
+# would otherwise hand the work login to every later personal session.
+# All -u options come first: env stops reading options at the first assignment.
+# CLAUDE_CODE_OAUTH_TOKEN would override whichever login CLAUDE_CONFIG_DIR picks.
+claude_account_env() {
+  printf 'env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN'
+  printf ' -u BRAIN_PROXY_PORT -u BRAIN_CLAUDE_CREDS -u BRAIN_ACCOUNT_FLAG'
+  if [ "$BRAIN_ACCOUNT" = default ]; then
+    printf ' -u CLAUDE_CONFIG_DIR BRAIN_ACCOUNT=default'
+  else
+    printf ' BRAIN_ACCOUNT=%q CLAUDE_CONFIG_DIR=%q' "$BRAIN_ACCOUNT" "$BRAIN_CLAUDE_DIR"
+  fi
+  printf ' BRAIN_AUTH_DIR=%q BRAIN_PROXY_URL=%q BRAIN_TOKEN_FILE=%q\n' \
+    "$BRAIN_AUTH_DIR" "$BRAIN_PROXY_URL" "$BRAIN_TOKEN_FILE"
+}
+
+# Repo names become paths, map keys and tmux names. Trailing slashes (tab
+# completion) are dropped by the callers; anything else odd is refused, so
+# "core/" can never miss its pin and serve with another set's logins.
+repo_name_ok() {
+  case "$1" in
+    ''|.*|-*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
 
 BRAIN_PIN_FILE="$BRAIN_REPO_DIR/host/proxy/PIN"
 # Vendored patches applied on top of the pinned commit. SERIES is a sha256sum-format
@@ -93,8 +211,8 @@ pin_get() {
 
 ensure_brain_dirs() {
   umask 077
-  mkdir -p "$BRAIN_CONFIG_DIR" "$BRAIN_DATA_DIR" "$BRAIN_STATE_DIR" "$BRAIN_AUTH_DIR"
-  chmod 700 "$BRAIN_CONFIG_DIR" "$BRAIN_AUTH_DIR"
+  mkdir -p "$BRAIN_CONFIG_DIR" "$BRAIN_ACCOUNT_DIR" "$BRAIN_DATA_DIR" "$BRAIN_STATE_DIR" "$BRAIN_AUTH_DIR"
+  chmod 700 "$BRAIN_CONFIG_DIR" "$BRAIN_ACCOUNT_DIR" "$BRAIN_AUTH_DIR"
 }
 
 # Print the proxy API token, generating it on first use.
@@ -298,13 +416,13 @@ claude_bin() {
 # builds reqwest with no TLS feature (loopback proxy only), and adding rustls to
 # it just to reach api.anthropic.com is a poor trade for ~40 lines of shell.
 
-BRAIN_USAGE_DIR="$BRAIN_STATE_DIR/usage"
+BRAIN_USAGE_DIR="$BRAIN_ACCOUNT_STATE_DIR/usage"
 BRAIN_USAGE_SUMMARY="$BRAIN_USAGE_DIR/summary.txt"
 BRAIN_USAGE_VENDORS="$BRAIN_USAGE_DIR/vendors.txt"
 BRAIN_USAGE_STAMP="$BRAIN_USAGE_DIR/.last-fetch"
 BRAIN_USAGE_LOCK="$BRAIN_USAGE_DIR/.refresh.lock"
 BRAIN_USAGE_OVERRIDE_FILE="$BRAIN_USAGE_DIR/OVERRIDE"
-BRAIN_CLAUDE_CREDS="${BRAIN_CLAUDE_CREDS:-$HOME/.claude/.credentials.json}"
+BRAIN_CLAUDE_CREDS="${BRAIN_CLAUDE_CREDS:-$BRAIN_CLAUDE_DIR/.credentials.json}"
 BRAIN_USAGE_ENDPOINT="${BRAIN_USAGE_ENDPOINT:-https://api.anthropic.com/api/oauth/usage}"
 
 # A cached sample older than the window it describes is meaningless.

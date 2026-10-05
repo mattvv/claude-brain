@@ -26,4 +26,5 @@ anything, and how to drive the account logins from chat.
   the machine, and never touch their firewall). Anything that changes the
   user's machine outside `~/.local/share/brain` needs to be reversible by
   `brain uninstall`.
-- Run `tests/platform/run.sh` and `tests/install/run.sh` before pushing.
+- Run `tests/platform/run.sh`, `tests/install/run.sh` and `tests/accounts/run.sh`
+  before pushing.

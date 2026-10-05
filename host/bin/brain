@@ -4,6 +4,11 @@
 #   brain            attach/create the Remote Control session (default)
 #   brain repo add X clone a GitHub repo and serve phone sessions for it
 #                    (also: repo ls | repo serve <name> | repo stop <name>)
+#   brain account    separate logins per repo (e.g. work vs personal):
+#                    account add NAME | ls | rm NAME [--purge]; then
+#                    brain auth anthropic|chatgpt --account NAME and
+#                    brain repo add X --account NAME
+#   --account NAME   run any command for that account set
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: host, proxy, logins, sessions
 #   brain autostart  come back automatically after a reboot (enable|disable|status)
@@ -33,7 +38,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SCRIPT_DIR/../lib/common.sh"
 
-AGENTS_DIR="$HOME/.claude/agents"
+AGENTS_DIR="$BRAIN_CLAUDE_DIR/agents"
 AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
 AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
 
@@ -51,11 +56,12 @@ install_agents() {
   done
 }
 
-# Install a managed block into ~/.claude/CLAUDE.md, replacing any previous copy.
+# Install a managed block into this account set's CLAUDE.md (~/.claude/CLAUDE.md
+# for the default set), replacing any previous copy.
 install_block() {
-  local src="$1" label="$2" target="$HOME/.claude/CLAUDE.md" tmp
+  local src="$1" label="$2" target="$BRAIN_CLAUDE_DIR/CLAUDE.md" tmp
   local start="<!-- claude-brain:$label:start -->" end="<!-- claude-brain:$label:end -->"
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$BRAIN_CLAUDE_DIR"
   tmp="$(mktemp)"
   if [ -f "$target" ]; then
     awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target" > "$tmp"
@@ -64,9 +70,9 @@ install_block() {
   mv "$tmp" "$target"
 }
 
-# Drop a managed block from ~/.claude/CLAUDE.md, leaving the user's own text.
+# Drop a managed block from the set's CLAUDE.md, leaving the user's own text.
 remove_block() {
-  local label="$1" target="$HOME/.claude/CLAUDE.md" tmp
+  local label="$1" target="$BRAIN_CLAUDE_DIR/CLAUDE.md" tmp
   local start="<!-- claude-brain:$label:start -->" end="<!-- claude-brain:$label:end -->"
   [ -f "$target" ] || return 0
   tmp="$(mktemp)"
@@ -175,9 +181,11 @@ REPOS_DIR="$HOME/repos"
 # workspace trust dialog for a project directory.
 seed_trust() {
   local dir="$1"
-  [ -s "$HOME/.claude.json" ] || echo '{}' > "$HOME/.claude.json"
+  local cfg="$BRAIN_CLAUDE_JSON"
+  mkdir -p "$(dirname "$cfg")"
+  [ -s "$cfg" ] || echo '{}' > "$cfg"
   jq --arg d "$dir" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' \
-    "$HOME/.claude.json" > "$HOME/.claude.json.tmp" && mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
+    "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
 }
 
 # Start (or attach to) a persistent Remote Control server for a directory.
@@ -185,19 +193,30 @@ seed_trust() {
 # RC needs api.anthropic.com, so any proxy override is scrubbed.
 rc_server() {
   local dir="$1" tmux_name="$2" prefix="$3"
+  dir="$(cd -P "$dir" && pwd)"
   need tmux jq
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   install_agents "$AGENTS_RC_SRC"
   install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
+  if [ "$BRAIN_ACCOUNT" != default ]; then
+    account_wire_settings
+    account_proxy_up
+    [ -e "$BRAIN_CLAUDE_DIR/.credentials.json" ] || grep -q oauthAccount "$BRAIN_CLAUDE_JSON" 2>/dev/null \
+      || warn "no Claude login for account set $BRAIN_ACCOUNT yet — run: brain auth anthropic --account $BRAIN_ACCOUNT"
+  fi
   seed_trust "$dir"
   rc_watch_mark "$tmux_name"
   if ! tmux has-session -t "=$tmux_name" 2>/dev/null; then
-    info "starting Remote Control server for $dir (tmux: $tmux_name)"
+    info "starting Remote Control server for $dir (tmux: $tmux_name, account set: $BRAIN_ACCOUNT)"
     info "open the Claude app (Code tab) or claude.ai/code to start sessions there"
+    [ "$BRAIN_ACCOUNT" = default ] \
+      || info "sessions appear in the app signed in to the $BRAIN_ACCOUNT Claude account, not your default one"
   fi
-  local launch
-  launch="cd '$dir' && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
-    $(claude_bin) remote-control --spawn same-dir --remote-control-session-name-prefix '$prefix'; exec bash"
+  # The set's env wraps the shell left in the pane after claude exits too,
+  # or that shell would carry whatever set started the tmux server.
+  local launch inner
+  inner="$(claude_bin) remote-control --spawn same-dir --remote-control-session-name-prefix $(printf %q "$prefix"); exec bash"
+  launch="cd $(printf %q "$dir") && exec $(claude_account_env) bash -c $(printf %q "$inner")"
   if [ -t 0 ]; then
     exec tmux new-session -A -s "$tmux_name" "$launch"
   else
@@ -213,7 +232,22 @@ cmd_rc() {
   check_for_updates
   mkdir -p "$ws"
   git -C "$ws" rev-parse --git-dir >/dev/null 2>&1 || git -C "$ws" init -q
-  rc_server "$ws" brain-rc brain
+  rc_server "$ws" "$(rc_session_name)" "brain$BRAIN_ACCOUNT_TAG"
+}
+
+# tmux name of this set's workspace server. Extra sets use their own namespace:
+# "brain-rc-<x>" belongs to repos, and a repo named like a set must never share
+# (or attach to, or kill) that set's server.
+rc_session_name() {
+  if [ "$BRAIN_ACCOUNT" = default ]; then echo brain-rc; else echo "brain-acct-$BRAIN_ACCOUNT"; fi
+}
+
+# Run this script again for another account set. Every path is resolved once
+# in common.sh, so switching sets mid-process is a re-exec, never a variable
+# shuffle.
+reexec_account() {
+  local acct="$1"; shift
+  exec env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$acct" "$SCRIPT_DIR/brain" "$@"
 }
 
 # -------------------------------------------------------------------- repos
@@ -223,13 +257,72 @@ cmd_repo() {
   local sub="${1:-ls}" arg="${2:-}"
   case "$sub" in
     add)
-      [ -n "$arg" ] || die "usage: brain repo add <owner/name | git-url> [name]"
+      # --dir PATH puts the checkout somewhere of the user's choosing (say
+      # ~/Documents/work/core); ~/repos/<name> then links to it, so serve, stop
+      # and ls find it like any other repo.
+      local want_dir="" rest=() a
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --dir)   [ $# -ge 2 ] || die "--dir needs a path"; want_dir="$2"; shift 2 ;;
+          --dir=*) want_dir="${1#--dir=}"; shift ;;
+          *)       rest+=("$1"); shift ;;
+        esac
+      done
+      arg="${rest[0]:-}"
+      [ -n "$arg" ] || die "usage: brain repo add <owner/name | git-url> [name] [--dir PATH] [--account NAME]"
       need git jq
-      local name="${3:-}"
-      [ -n "$name" ] || { name="${arg##*/}"; name="${name%.git}"; }
+      local name="${rest[1]:-}"
+      [ -n "$name" ] || { name="${arg%/}"; name="${name##*/}"; name="${name%.git}"; }
+      name="${name%/}"
+      repo_name_ok "$name" || die "bad repo name: $name (use letters, digits, . _ -)"
+      # Which logins this repo runs under: only an explicit --account changes
+      # it. Without one a repo keeps its pin, and an unpinned repo is default —
+      # never the set of whichever session happens to run the command.
+      local acct cur
+      cur="$(repo_account_get "$name")"
+      if [ -n "${BRAIN_ACCOUNT_FLAG:-}" ]; then
+        acct="$BRAIN_ACCOUNT"
+      else
+        acct="$cur"
+      fi
+      account_exists "$acct" || die "no account set '$acct' — create it first: brain account add $acct"
+      if [ "$acct" != "$cur" ] && tmux has-session -t "=brain-rc-$name" 2>/dev/null; then
+        die "$name is being served with account set $cur — stop it first: brain repo stop $name"
+      fi
+      # Hand over to the target set; the flag carries the decision across.
+      if [ "$acct" != "$BRAIN_ACCOUNT" ]; then
+        if [ -n "$want_dir" ]; then
+          exec env BRAIN_ACCOUNT="$acct" BRAIN_ACCOUNT_FLAG=1 "$SCRIPT_DIR/brain" repo add "$arg" "$name" --dir "$want_dir"
+        fi
+        exec env BRAIN_ACCOUNT="$acct" BRAIN_ACCOUNT_FLAG=1 "$SCRIPT_DIR/brain" repo add "$arg" "$name"
+      fi
       mkdir -p "$REPOS_DIR"
       local dir="$REPOS_DIR/$name"
-      if [ ! -d "$dir" ]; then
+      if [ -n "$want_dir" ]; then
+        case "$want_dir" in "~"/*) want_dir="$HOME/${want_dir#\~/}" ;; esac
+        mkdir -p "$(dirname "$want_dir")"
+        want_dir="$(cd -P "$(dirname "$want_dir")" && pwd)/$(basename "$want_dir")"
+        if [ -L "$dir" ]; then
+          [ "$(cd -P "$dir" 2>/dev/null && pwd)" = "$want_dir" ] \
+            || die "$dir already points somewhere else: $(readlink "$dir")"
+        elif [ -e "$dir" ]; then
+          die "$dir already exists as a checkout — serve that one, or pick another name"
+        fi
+        if [ ! -d "$want_dir" ]; then
+          info "cloning $arg into $want_dir"
+          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            gh repo clone "$arg" "$want_dir"
+          else
+            git clone "$arg" "$want_dir"
+          fi
+        else
+          git -C "$want_dir" rev-parse --git-dir >/dev/null 2>&1 \
+            || die "$want_dir exists but is not a git checkout"
+          step_done "already cloned: $want_dir"
+        fi
+        [ -L "$dir" ] || { ln -s "$want_dir" "$dir"; step_done "linked $dir -> $want_dir"; }
+      elif [ ! -d "$dir" ]; then
         info "cloning $arg into $dir"
         if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
           gh repo clone "$arg" "$dir"
@@ -239,15 +332,28 @@ cmd_repo() {
       else
         step_done "already cloned: $dir"
       fi
+      # Pin only once the checkout exists: a failed clone must not leave a pin.
+      repo_account_set "$name" "$acct"
+      [ "$acct" = default ] || info "$name uses account set: $acct"
       rc_server "$dir" "brain-rc-$name" "$name"
       ;;
     serve)
+      arg="${arg%/}"
       [ -n "$arg" ] || die "usage: brain repo serve <name>"
+      repo_name_ok "$arg" || die "bad repo name: $arg"
       [ -d "$REPOS_DIR/$arg" ] || die "no such repo: $REPOS_DIR/$arg (see: brain repo ls)"
+      local assigned
+      assigned="$(repo_account_get "$arg")"
+      if [ -n "${BRAIN_ACCOUNT_FLAG:-}" ] && [ "$BRAIN_ACCOUNT" != "$assigned" ]; then
+        die "$arg is assigned to account set $assigned — to move it: brain repo add $arg --account $BRAIN_ACCOUNT"
+      fi
+      [ "$assigned" = "$BRAIN_ACCOUNT" ] || reexec_account "$assigned" repo serve "$arg"
       rc_server "$REPOS_DIR/$arg" "brain-rc-$arg" "$arg"
       ;;
     stop)
+      arg="${arg%/}"
       [ -n "$arg" ] || die "usage: brain repo stop <name>"
+      repo_name_ok "$arg" || die "bad repo name: $arg"
       rc_watch_unmark "brain-rc-$arg"
       tmux kill-session -t "=brain-rc-$arg" 2>/dev/null \
         && ok "stopped server for $arg" || warn "no server running for $arg"
@@ -258,10 +364,12 @@ cmd_repo() {
       for d in "$REPOS_DIR"/*/; do
         [ -d "$d" ] || { warn "none yet — add one: brain repo add <owner/name>"; return 0; }
         name="$(basename "$d")"
+        local acct_note=""
+        [ "$(repo_account_get "$name")" = default ] || acct_note=" [account: $(repo_account_get "$name")]"
         if tmux has-session -t "=brain-rc-$name" 2>/dev/null; then
-          ok "$name (serving — sessions available in the app)"
+          ok "$name$acct_note (serving — sessions available in the app)"
         else
-          step_todo "$name (stopped — start: brain repo serve $name)"
+          step_todo "$name$acct_note (stopped — start: brain repo serve $name)"
         fi
       done
       ;;
@@ -638,12 +746,14 @@ cmd_multi() {
   # 272000 = smallest context window across the cast. gpt-6-astra is 272k in the
   # pinned catalog, below the gpt-5.6-* 372k; the cap has to track the minimum or
   # a full context overflows whichever agent has the smallest window.
-  exec tmux new-session -A -s brain-multi \
-    "env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN \
+  local inner
+  inner="$(claude_bin) --model 'claude-fable-5[1m]'; exec bash"
+  exec tmux new-session -A -s "brain-multi$BRAIN_ACCOUNT_TAG" \
+    "exec $(claude_account_env) \
        ANTHROPIC_BASE_URL=$BRAIN_PROXY_URL \
        ANTHROPIC_AUTH_TOKEN=$token \
        CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000 \
-       $(claude_bin) --model 'claude-fable-5[1m]'; exec bash"
+       bash -c $(printf %q "$inner")"
 }
 
 # ------------------------------------------------------------------- status
@@ -653,11 +763,15 @@ cmd_status() {
   printf '    host: %s · %s/%s · profile=%s · scope=%s\n' \
     "$(brain_distro)" "$(brain_os)" "$(brain_arch)" \
     "$(setting_get PROFILE "$(default_profile)")" "$(setting_get SCOPE machine)"
+  if [ "$BRAIN_ACCOUNT" != default ]; then
+    printf '    account set: %s (claude: %s · proxy logins: %s)\n' \
+      "$BRAIN_ACCOUNT" "$BRAIN_CLAUDE_DIR" "$BRAIN_AUTH_DIR"
+  fi
 
-  if svc_is_active proxy; then
+  if svc_is_active "$(proxy_svc)"; then
     ok "proxy service: running"
   else
-    fail "proxy service: not running (restart: $(svc_restart_hint proxy))"
+    fail "proxy service: not running (restart: $(svc_restart_hint "$(proxy_svc)"))"
   fi
 
   if proxy_ready; then
@@ -695,7 +809,7 @@ cmd_status() {
   else
     fail "claude not installed"
   fi
-  if [ -e "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; then
+  if [ -e "$BRAIN_CLAUDE_DIR/.credentials.json" ] || grep -q oauthAccount "$BRAIN_CLAUDE_JSON" 2>/dev/null; then
     ok "claude login present (verify inside a session with /status)"
   else
     warn "no claude login yet — run: brain auth anthropic"
@@ -736,13 +850,21 @@ cmd_status() {
   fi
 
   printf '%s\n' "${C_BOLD}sessions${C_RESET}"
-  if tmux has-session -t brain-rc 2>/dev/null; then
-    ok "brain-rc running (attach: brain)"
+  local rc_name rc_cmd="brain"
+  rc_name="$(rc_session_name)"
+  [ "$BRAIN_ACCOUNT" = default ] || rc_cmd="brain --account $BRAIN_ACCOUNT"
+  if tmux has-session -t "=$rc_name" 2>/dev/null; then
+    ok "$rc_name running (attach: $rc_cmd)"
   else
-    step_todo "brain-rc not running (start: brain)"
+    step_todo "$rc_name not running (start: $rc_cmd)"
   fi
-  if tmux has-session -t brain-multi 2>/dev/null; then
+  if tmux has-session -t =brain-multi 2>/dev/null; then
     ok "brain-multi running (attach: brain multi)"
+  fi
+
+  if [ "$(account_list | wc -l)" -gt 1 ]; then
+    printf '%s\n' "${C_BOLD}account sets${C_RESET} (details: brain status --account NAME)"
+    account_summary
   fi
 }
 
@@ -763,27 +885,32 @@ vendor_login_flags() {
 
 # vendor_record_prefix / vendor_linked live in lib/common.sh (shared with the hooks).
 
+# " --account NAME" for follow-up hints when running in an extra set.
+account_flag() {
+  [ "$BRAIN_ACCOUNT" = default ] || printf ' --account %s' "$BRAIN_ACCOUNT"
+}
+
 cmd_auth_start() {
   local vendor="$1" flags log
   flags="$(vendor_login_flags "$vendor")" || die "unknown vendor: $vendor"
   [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
   need tmux
-  log="$BRAIN_STATE_DIR/auth-$vendor.log"
-  mkdir -p "$BRAIN_STATE_DIR"
+  log="$BRAIN_ACCOUNT_STATE_DIR/auth-$vendor.log"
+  mkdir -p "$BRAIN_ACCOUNT_STATE_DIR"
   rm -f "$log"
-  tmux kill-session -t "auth-$vendor" 2>/dev/null || true
+  tmux kill-session -t "=auth$BRAIN_ACCOUNT_TAG-$vendor" 2>/dev/null || true
   # Brief sleep so pipe-pane attaches before the login prints its URL.
   # shellcheck disable=SC2086  # flags are intentionally word-split
-  tmux new-session -d -s "auth-$vendor" \
+  tmux new-session -d -s "auth$BRAIN_ACCOUNT_TAG-$vendor" \
     "sleep 1; $BRAIN_PROXY_BIN --config $BRAIN_PROXY_CONFIG $flags"
-  tmux pipe-pane -t "auth-$vendor" -o "cat >> $log"
+  tmux pipe-pane -t "auth$BRAIN_ACCOUNT_TAG-$vendor" -o "cat >> $log"
 
   local i url=""
   for i in $(seq 1 30); do
     sleep 1
     url="$(grep -oE 'https://[^[:space:]]+' "$log" 2>/dev/null | head -1 || true)"
     [ -n "$url" ] && break
-    tmux has-session -t "auth-$vendor" 2>/dev/null || break
+    tmux has-session -t "=auth$BRAIN_ACCOUNT_TAG-$vendor" 2>/dev/null || break
   done
   if [ -z "$url" ]; then
     fail "no login URL appeared after ${i}s — output so far:"
@@ -797,20 +924,20 @@ cmd_auth_start() {
     # Device-style flow: completes on its own once approved.
     grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log" | head -1 \
       | sed 's/^/  device code: /' || true
-    info "then run: brain auth check $vendor"
+    info "then run: brain auth check $vendor$(account_flag)"
   else
     info "after approving, the browser lands on a localhost address that won't load —"
-    info "copy that address and run: brain auth paste $vendor '<that-url>'"
+    info "copy that address and run: brain auth paste $vendor '<that-url>'$(account_flag)"
   fi
 }
 
 cmd_auth_paste() {
   local vendor="$1" url="${2:-}"
   [ -n "$url" ] || die "usage: brain auth paste <vendor> '<callback-url>'"
-  tmux has-session -t "auth-$vendor" 2>/dev/null \
+  tmux has-session -t "=auth$BRAIN_ACCOUNT_TAG-$vendor" 2>/dev/null \
     || die "no login in progress for $vendor — run: brain auth start $vendor"
-  tmux send-keys -t "auth-$vendor" -l "$url"
-  tmux send-keys -t "auth-$vendor" Enter
+  tmux send-keys -t "auth$BRAIN_ACCOUNT_TAG-$vendor" -l "$url"
+  tmux send-keys -t "auth$BRAIN_ACCOUNT_TAG-$vendor" Enter
   sleep 3
   cmd_auth_check "$vendor"
 }
@@ -820,15 +947,15 @@ cmd_auth_check() {
   chmod 700 "$BRAIN_AUTH_DIR" 2>/dev/null || true
   chmod 600 "$BRAIN_AUTH_DIR"/*.json 2>/dev/null || true
   if vendor_linked "$vendor"; then
-    tmux kill-session -t "auth-$vendor" 2>/dev/null || true
+    tmux kill-session -t "=auth$BRAIN_ACCOUNT_TAG-$vendor" 2>/dev/null || true
     ok "$vendor linked"
-  elif tmux has-session -t "auth-$vendor" 2>/dev/null; then
+  elif tmux has-session -t "=auth$BRAIN_ACCOUNT_TAG-$vendor" 2>/dev/null; then
     warn "$vendor login still in progress — recent output:"
-    tail -5 "$BRAIN_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
+    tail -5 "$BRAIN_ACCOUNT_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
     exit 1
   else
     fail "$vendor login ended without a credential — output:"
-    tail -15 "$BRAIN_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
+    tail -15 "$BRAIN_ACCOUNT_STATE_DIR/auth-$vendor.log" 2>/dev/null >&2 || true
     exit 1
   fi
 }
@@ -846,7 +973,8 @@ cmd_auth() {
       claude_bin >/dev/null || die "claude not installed — run: brain setup"
       info "launching claude — follow the login prompts, open the URL on your"
       info "laptop or phone, paste the code back here, then /exit"
-      env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY "$(claude_bin)"
+      [ "$BRAIN_ACCOUNT" = default ] || info "account set $BRAIN_ACCOUNT: this login is stored in $BRAIN_CLAUDE_DIR"
+      bash -c "$(claude_account_env) '$(claude_bin)'"
       ;;
     chatgpt)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
@@ -933,12 +1061,13 @@ migrate_proxy_config() {
 render_proxy_config() {
   umask 077
   sed -e "s|__TOKEN__|$(brain_token)|" -e "s|__AUTH_DIR__|$BRAIN_AUTH_DIR|" \
+      -e "s|__PORT__|$BRAIN_PROXY_PORT|" \
     "$BRAIN_REPO_DIR/host/templates/proxy-config.yaml.tmpl" > "$BRAIN_PROXY_CONFIG"
   chmod 600 "$BRAIN_PROXY_CONFIG"
 }
 
 install_unit() {
-  svc_install proxy
+  svc_install "$(proxy_svc)"
 }
 
 ask_yn() {
@@ -985,6 +1114,8 @@ setup_offer() {
 }
 
 cmd_setup() {
+  [ "$BRAIN_ACCOUNT" = default ] \
+    || die "setup is for the machine; for an extra account set use: brain account add $BRAIN_ACCOUNT"
   while [ $# -gt 0 ]; do
     case "$1" in
       --yes|-y)     BRAIN_SETUP_YES=1; shift ;;
@@ -1062,7 +1193,7 @@ cmd_setup() {
 
   # 2. Claude login (the core product)
   info "step 2/7: sign in to Claude (your main brain)"
-  if [ -e "$HOME/.claude/.credentials.json" ] || grep -q oauthAccount "$HOME/.claude.json" 2>/dev/null; then
+  if [ -e "$BRAIN_CLAUDE_DIR/.credentials.json" ] || grep -q oauthAccount "$BRAIN_CLAUDE_JSON" 2>/dev/null; then
     step_done "claude login already present"
   elif [ "$BRAIN_SETUP_YES" -eq 1 ] || [ ! -t 0 ]; then
     # The Claude login is interactive by nature. Unattended runs must not launch
@@ -1517,7 +1648,7 @@ cmd_config() {
       ;;
     statusline)
       command -v jq >/dev/null 2>&1 || die "jq is required to change the statusline"
-      local settings="$HOME/.claude/settings.json"
+      local settings="$BRAIN_CLAUDE_DIR/settings.json"
       [ -s "$settings" ] || echo '{}' > "$settings"
       case "$val" in
         on)
@@ -1595,6 +1726,11 @@ cmd_update() {
     fi
     info "refreshed ~/.claude agents and routing (new sessions pick them up)"
   fi
+  local acct
+  for acct in $(account_list | sed 1d); do
+    env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$acct" "$SCRIPT_DIR/brain" account _refresh \
+      || warn "could not refresh account set $acct"
+  done
   update_check_now || true
   ok "updated"
 }
@@ -1610,6 +1746,9 @@ cmd_uninstall() {
   printf '    stop and remove the router%s service(s)\n' "$([ "$(brain_os)" = macos ] && echo " (launchd)" || echo " (systemd)")"
   printf '    remove the brain commands from ~/.local/bin\n'
   printf '    remove claude-brain hooks, agents and CLAUDE.md blocks from ~/.claude\n'
+  if [ "$(account_list | wc -l)" -gt 1 ]; then
+    printf '    the same for every extra account set: %s\n' "$(account_list | sed 1d | paste -sd' ' -)"
+  fi
   if [ "$purge" -eq 1 ]; then
     printf '    %s\n' "${C_RED}delete all brain state AND your linked account credentials${C_RESET}"
   else
@@ -1620,6 +1759,15 @@ cmd_uninstall() {
 
   svc_uninstall rc
   svc_uninstall proxy
+  local acct
+  for acct in $(account_list | sed 1d); do
+    env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$acct" "$SCRIPT_DIR/brain" account _unwire || true
+    svc_uninstall "proxy@$acct"
+    if [ "$purge" -eq 1 ]; then
+      rm -rf "$HOME/.cli-proxy-api-$acct"
+    fi
+    info "kept $HOME/.claude-$acct (the $acct Claude login and its config) — delete it yourself if unwanted"
+  done
 
   local tool
   for tool in brain-ask brain-compress brain-proxy-build; do
@@ -1664,7 +1812,280 @@ cmd_uninstall() {
   info "your PATH line in ~/.bashrc / ~/.zshrc is harmless, but you can remove it"
 }
 
+# ------------------------------------------------------------- account sets
+# Extra sets of logins (see BRAIN_ACCOUNT in lib/common.sh). Each set beyond
+# "default" has its own Claude config dir, proxy auth-dir, token, port and proxy
+# service; `brain repo add X --account NAME` pins a repo's sessions to one.
+
+BRAIN_MANAGED_HOOKS='model-guard|consult-poll-guard|consult-progress|brain-compress-bash|brain-compress-read|update-notice'
+
+# Give this set's Claude config the same claude-brain hooks and statusline that
+# install.sh registered in ~/.claude/settings.json. Copying the registered
+# entries (rather than rebuilding them) keeps one source of truth: install.sh.
+account_wire_settings() {
+  local src="$HOME/.claude/settings.json" dst="$BRAIN_CLAUDE_DIR/settings.json"
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -s "$src" ] || return 0
+  mkdir -p "$BRAIN_CLAUDE_DIR"
+  [ -s "$dst" ] || echo '{}' > "$dst"
+  jq --slurpfile base "$src" --arg managed "$BRAIN_MANAGED_HOOKS" '
+    def ours(list): [list[]? | select((.hooks[]?.command // "") | test($managed))];
+    def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
+    def brainline(x): ((x.command // "") | test("claude-brain|/host/claude/statusline.sh"));
+    .hooks.PreToolUse = (strip(.hooks.PreToolUse) + ours($base[0].hooks.PreToolUse))
+    | .hooks.PostToolUse = (strip(.hooks.PostToolUse) + ours($base[0].hooks.PostToolUse))
+    | .hooks.SessionStart = (strip(.hooks.SessionStart) + ours($base[0].hooks.SessionStart))
+    | if brainline($base[0].statusLine // {}) and (.statusLine == null or brainline(.statusLine))
+      then .statusLine = $base[0].statusLine else . end
+  ' "$dst" > "$dst.tmp" && mv "$dst.tmp" "$dst"
+}
+
+# Undo account_wire_settings, the agents and the CLAUDE.md blocks for this set.
+account_unwire() {
+  local name settings="$BRAIN_CLAUDE_DIR/settings.json"
+  for name in "${ALL_BRAIN_AGENTS[@]}"; do
+    rm -f "$AGENTS_DIR/$name.md"
+  done
+  remove_block routing
+  remove_block ops
+  remove_block usage
+  remove_block consult
+  if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
+    jq --arg managed "$BRAIN_MANAGED_HOOKS" '
+      def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
+      .hooks.PreToolUse = strip(.hooks.PreToolUse)
+      | .hooks.PostToolUse = strip(.hooks.PostToolUse)
+      | .hooks.SessionStart = strip(.hooks.SessionStart)
+      | if ((.statusLine.command // "") | test("claude-brain|/host/claude/statusline.sh"))
+        then del(.statusLine) else . end
+    ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+  fi
+}
+
+# Start this set's proxy if it is not running, and give it ~10s to answer.
+account_proxy_up() {
+  local i
+  svc_is_active "$(proxy_svc)" || svc_install "$(proxy_svc)"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    proxy_ready && return 0
+    sleep 1
+  done
+  warn "account set $BRAIN_ACCOUNT: proxy not answering on $BRAIN_PROXY_URL yet — check: brain status --account $BRAIN_ACCOUNT"
+  return 1
+}
+
+# First port at or above BRAIN_ACCOUNT_BASE_PORT that no set claims and nothing
+# is listening on.
+account_free_port() {
+  local p="$BRAIN_ACCOUNT_BASE_PORT"
+  while grep -qx "PORT=$p" "$BRAIN_ACCOUNTS_DIR"/*/account 2>/dev/null || port_listening "$p"; do
+    p=$((p + 1))
+  done
+  printf '%s\n' "$p"
+}
+
+# A new set starts with an empty Claude config. Carry over what is about the
+# machine rather than the account: the user's own CLAUDE.md text (house rules
+# such as "never touch the firewall" must hold in every session) and their
+# skills/commands, linked so they stay in step. MCP servers, plugins and
+# connectors are per account by nature and are left to the user.
+account_seed_claude_dir() {
+  local d
+  if [ ! -e "$BRAIN_CLAUDE_DIR/CLAUDE.md" ] && [ -s "$HOME/.claude/CLAUDE.md" ]; then
+    awk '/^<!-- claude-brain:[a-z-]*:start -->$/{skip=1} !skip{print} /^<!-- claude-brain:[a-z-]*:end -->$/{skip=0}' \
+      "$HOME/.claude/CLAUDE.md" > "$BRAIN_CLAUDE_DIR/CLAUDE.md"
+    step_done "copied your own ~/.claude/CLAUDE.md instructions (not the brain blocks) into $BRAIN_CLAUDE_DIR/CLAUDE.md"
+  fi
+  for d in skills commands; do
+    if [ -d "$HOME/.claude/$d" ] && [ ! -e "$BRAIN_CLAUDE_DIR/$d" ]; then
+      ln -s "$HOME/.claude/$d" "$BRAIN_CLAUDE_DIR/$d"
+      step_done "linked $BRAIN_CLAUDE_DIR/$d -> ~/.claude/$d"
+    fi
+  done
+}
+
+account_create() {
+  [ "$BRAIN_ACCOUNT" != default ] || die "the default account set always exists"
+  need jq curl
+  [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+  local port="${1:-}"
+  if account_exists "$BRAIN_ACCOUNT"; then
+    step_done "account set $BRAIN_ACCOUNT already exists (port $BRAIN_PROXY_PORT)"
+  else
+    if [ -n "$port" ]; then
+      case "$port" in ''|*[!0-9]*) die "bad port: $port" ;; esac
+      [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || die "port must be 1024-65535: $port"
+      [ "$port" != 8317 ] || die "8317 is the default set's router"
+      ! grep -qx "PORT=$port" "$BRAIN_ACCOUNTS_DIR"/*/account 2>/dev/null \
+        || die "port $port already belongs to another account set"
+      ! port_listening "$port" || die "something is already listening on port $port"
+    else
+      port="$(account_free_port)"
+    fi
+    ensure_brain_dirs
+    printf 'PORT=%s\n' "$port" > "$BRAIN_ACCOUNT_DIR/account"
+    # The one in-process change of set state: the port did not exist when
+    # common.sh resolved this set.
+    BRAIN_PROXY_PORT="$port"
+    BRAIN_PROXY_URL="http://127.0.0.1:$port"
+    step_done "created account set $BRAIN_ACCOUNT (proxy port $port)"
+  fi
+  ensure_brain_dirs
+  [ -f "$BRAIN_PROXY_CONFIG" ] || { render_proxy_config; step_done "router config written: $BRAIN_PROXY_CONFIG"; }
+  mkdir -p "$BRAIN_CLAUDE_DIR"
+  chmod 700 "$BRAIN_CLAUDE_DIR"
+  account_seed_claude_dir
+  install_agents "$AGENTS_RC_SRC"
+  install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
+  account_wire_settings
+  step_done "claude-brain agents, routing and hooks installed in $BRAIN_CLAUDE_DIR"
+  account_proxy_up && ok "router for $BRAIN_ACCOUNT healthy on $BRAIN_PROXY_URL"
+  info "next:"
+  printf '    brain auth anthropic --account %s     # sign in to the %s Claude account\n' "$BRAIN_ACCOUNT" "$BRAIN_ACCOUNT"
+  printf '    brain auth chatgpt --account %s       # its ChatGPT account (also grok|kimi)\n' "$BRAIN_ACCOUNT"
+  printf '    brain repo add <owner/name> --account %s\n' "$BRAIN_ACCOUNT"
+}
+
+# Repos pinned to a set, one per line.
+account_repos() {
+  [ -f "$BRAIN_REPO_ACCOUNTS" ] || return 0
+  awk -F= -v a="$1" '$2==a{print $1}' "$BRAIN_REPO_ACCOUNTS"
+}
+
+# One line per extra set, for `brain status` and `brain account ls`.
+account_summary() {
+  local a port vendors repos login
+  for a in $(account_list | sed 1d); do
+    port="$(sed -n 's/^PORT=//p' "$BRAIN_ACCOUNTS_DIR/$a/account" | tail -1)"
+    vendors="$( (ls "$HOME/.cli-proxy-api-$a"/*.json 2>/dev/null || true) | sed 's|.*/||; s|-.*||' | sort -u | paste -sd, -)"
+    repos="$(account_repos "$a" | paste -sd, -)"
+    if [ -e "$HOME/.claude-$a/.credentials.json" ] || grep -q oauthAccount "$HOME/.claude-$a/.claude.json" 2>/dev/null; then
+      login="claude login present"
+    else
+      login="no claude login (brain auth anthropic --account $a)"
+    fi
+    if svc_is_active "proxy@$a"; then
+      ok "$a — proxy :$port · $login · proxy logins: ${vendors:-none} · repos: ${repos:-none}"
+    else
+      warn "$a — proxy :$port NOT running (restart: $(svc_restart_hint "proxy@$a")) · $login · repos: ${repos:-none}"
+    fi
+  done
+}
+
+cmd_account() {
+  local sub="${1:-ls}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    ls)
+      printf '%s\n' "${C_BOLD}account sets${C_RESET}"
+      ok "default — proxy :8317 · ~/.claude · ~/.cli-proxy-api"
+      account_summary
+      ;;
+    add)
+      local name="${1:-}" port=""
+      [ -n "$name" ] || die "usage: brain account add <name> [--port N]"
+      [ "${2:-}" = "--port" ] && port="${3:-}"
+      account_name_ok "$name" || die "account set names use a-z, 0-9 and - (got: $name)"
+      [ "$name" != default ] || die "the default account set always exists"
+      reexec_account "$name" account _add "$port"
+      ;;
+    rm)
+      local name="${1:-}" purge=0 yes=0 arg repos
+      [ -n "$name" ] || die "usage: brain account rm <name> [--purge] [--yes]"
+      { account_name_ok "$name" && [ "$name" != default ]; } || die "cannot remove account set: $name"
+      account_exists "$name" || die "no account set: $name"
+      for arg in "$@"; do
+        case "$arg" in --purge) purge=1 ;; --yes) yes=1 ;; esac
+      done
+      repos="$(account_repos "$name" | paste -sd' ' -)"
+      # Dropping the set would silently move these repos onto the default logins.
+      [ -z "$repos" ] || die "repos still use $name: $repos — move each first: brain repo add <repo> --account default"
+      info "removing account set $name: its proxy service and $BRAIN_ACCOUNTS_DIR/$name"
+      if [ "$purge" -eq 1 ]; then
+        printf '    %s\n' "${C_RED}and delete its proxy logins ($HOME/.cli-proxy-api-$name) and Claude login/config ($HOME/.claude-$name)${C_RESET}"
+      else
+        printf '    keeping %s and %s (add --purge to delete them)\n' "$HOME/.cli-proxy-api-$name" "$HOME/.claude-$name"
+      fi
+      if [ "$yes" -eq 0 ]; then
+        [ -t 0 ] || die "no terminal to confirm on — re-run with --yes"
+        ask_yn "Go ahead?" || { info "nothing changed"; return 0; }
+      fi
+      env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$name" "$SCRIPT_DIR/brain" account _unwire || true
+      svc_uninstall "proxy@$name"
+      rm -rf "${BRAIN_ACCOUNTS_DIR:?}/$name" "$BRAIN_STATE_DIR/accounts/$name"
+      [ "$purge" -eq 0 ] || rm -rf "$HOME/.cli-proxy-api-$name" "$HOME/.claude-$name"
+      ok "account set $name removed"
+      ;;
+    # Internal: these run inside the target set (via reexec_account / env BRAIN_ACCOUNT).
+    _add) account_create "${1:-}" ;;
+    _unwire)
+      [ "$BRAIN_ACCOUNT" != default ] || die "_unwire is for extra account sets"
+      tmux kill-session -t "=$(rc_session_name)" 2>/dev/null || true
+      tmux kill-session -t "=brain-multi$BRAIN_ACCOUNT_TAG" 2>/dev/null || true
+      account_unwire
+      ;;
+    _refresh)
+      [ "$BRAIN_ACCOUNT" != default ] || die "_refresh is for extra account sets"
+      migrate_proxy_config
+      svc_install "$(proxy_svc)"
+      svc_restart "$(proxy_svc)"
+      if [ -f "$AGENTS_DIR/brain-sol.md" ]; then
+        if grep -q "multi-lane agent" "$AGENTS_DIR/brain-sol.md"; then
+          install_agents "$AGENTS_MULTI_SRC"
+          install_routing "$BRAIN_REPO_DIR/host/claude/routing-multi.md"
+        else
+          install_agents "$AGENTS_RC_SRC"
+          install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
+        fi
+      fi
+      account_wire_settings
+      info "refreshed account set $BRAIN_ACCOUNT"
+      ;;
+    *) die "usage: brain account <ls|add NAME [--port N]|rm NAME [--purge] [--yes]>" ;;
+  esac
+}
+
 # ----------------------------------------------------------------- dispatch
+# `--account NAME` (anywhere on the line) runs the command for that account
+# set. It re-execs so lib/common.sh resolves every path for the set up front;
+# BRAIN_ACCOUNT_FLAG tells `brain repo` the choice was explicit. Sessions never
+# inherit the flag (claude_account_env scrubs it).
+_brain_acct=""
+_brain_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --account)   [ $# -ge 2 ] || die "--account needs a name"; _brain_acct="$2"; shift 2 ;;
+    --account=*) _brain_acct="${1#--account=}"; [ -n "$_brain_acct" ] || die "--account needs a name"; shift ;;
+    *)           _brain_args+=("$1"); shift ;;
+  esac
+done
+if [ -n "$_brain_acct" ]; then
+  account_name_ok "$_brain_acct" || die "account set names use a-z, 0-9 and - (got: $_brain_acct)"
+  exec env BRAIN_ACCOUNT="$_brain_acct" BRAIN_ACCOUNT_FLAG=1 "$SCRIPT_DIR/brain" ${_brain_args[@]+"${_brain_args[@]}"}
+fi
+set -- ${_brain_args[@]+"${_brain_args[@]}"}
+unset _brain_acct _brain_args
+
+[ "$BRAIN_ACCOUNT" != __invalid__ ] || die "BRAIN_ACCOUNT is not a valid account set name"
+
+# update and uninstall are about the machine, not a set: run them as the default
+# set even when typed (or auto-run) inside a work session, so they refresh and
+# remove ~/.claude and the default router — and still walk every extra set.
+case "${1:-}" in
+  update|uninstall)
+    if [ "$BRAIN_ACCOUNT" != default ]; then
+      exec env -u CLAUDE_CONFIG_DIR -u BRAIN_TOKEN_FILE -u BRAIN_PROXY_URL -u BRAIN_AUTH_DIR \
+        -u BRAIN_PROXY_PORT -u BRAIN_CLAUDE_CREDS -u BRAIN_ACCOUNT_FLAG \
+        BRAIN_ACCOUNT=default "$SCRIPT_DIR/brain" "$@"
+    fi
+    ;;
+esac
+if ! account_exists "$BRAIN_ACCOUNT"; then
+  case "${1:-}" in
+    account|help|-h|--help) ;;
+    *) die "no account set '$BRAIN_ACCOUNT' — create it: brain account add $BRAIN_ACCOUNT" ;;
+  esac
+fi
 case "${1:-rc}" in
   rc|"")     cmd_rc ;;
   multi)     cmd_multi ;;
@@ -1675,6 +2096,7 @@ case "${1:-rc}" in
   teleport)  shift; cmd_teleport "$@" ;;
   keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
+  account)   shift; cmd_account "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   setup)     shift; cmd_setup "$@" ;;
   consult)   shift; cmd_consult "$@" ;;
@@ -1685,6 +2107,6 @@ case "${1:-rc}" in
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
-  help|-h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
