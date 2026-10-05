@@ -7,6 +7,8 @@
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: host, proxy, logins, sessions
 #   brain autostart  come back automatically after a reboot (enable|disable|status)
+#   brain watchdog   restart RC servers that died, e.g. after sleep (run
+#                    every minute by autostart; safe to run by hand)
 #   brain keepawake  stop this machine from sleeping (shows what it will change)
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
 #                    for a world-reachable Funnel URL; 'off' to stop)
@@ -186,7 +188,8 @@ rc_server() {
   install_agents "$AGENTS_RC_SRC"
   install_routing "$BRAIN_REPO_DIR/host/claude/routing-rc.md"
   seed_trust "$dir"
-  if ! tmux has-session -t "$tmux_name" 2>/dev/null; then
+  rc_watch_mark "$tmux_name"
+  if ! tmux has-session -t "=$tmux_name" 2>/dev/null; then
     info "starting Remote Control server for $dir (tmux: $tmux_name)"
     info "open the Claude app (Code tab) or claude.ai/code to start sessions there"
   fi
@@ -197,7 +200,7 @@ rc_server() {
     exec tmux new-session -A -s "$tmux_name" "$launch"
   else
     # No terminal (e.g. invoked by a Claude session): run the server detached.
-    tmux has-session -t "$tmux_name" 2>/dev/null || tmux new-session -d -s "$tmux_name" "$launch"
+    tmux has-session -t "=$tmux_name" 2>/dev/null || tmux new-session -d -s "$tmux_name" "$launch"
     ok "server running detached (attach later: tmux attach -t $tmux_name)"
   fi
 }
@@ -243,7 +246,8 @@ cmd_repo() {
       ;;
     stop)
       [ -n "$arg" ] || die "usage: brain repo stop <name>"
-      tmux kill-session -t "brain-rc-$arg" 2>/dev/null \
+      rc_watch_unmark "brain-rc-$arg"
+      tmux kill-session -t "=brain-rc-$arg" 2>/dev/null \
         && ok "stopped server for $arg" || warn "no server running for $arg"
       ;;
     ls)
@@ -252,7 +256,7 @@ cmd_repo() {
       for d in "$REPOS_DIR"/*/; do
         [ -d "$d" ] || { warn "none yet — add one: brain repo add <owner/name>"; return 0; }
         name="$(basename "$d")"
-        if tmux has-session -t "brain-rc-$name" 2>/dev/null; then
+        if tmux has-session -t "=brain-rc-$name" 2>/dev/null; then
           ok "$name (serving — sessions available in the app)"
         else
           step_todo "$name (stopped — start: brain repo serve $name)"
@@ -263,6 +267,59 @@ cmd_repo() {
       die "usage: brain repo <add|serve|stop|ls>"
       ;;
   esac
+}
+
+# ---------------------------------------------------------------- watchdog
+# `claude remote-control` gives up after ~10 min of network errors (a long
+# sleep, a flaky Wi-Fi) and exits, but its tmux pane lingers as a bare shell —
+# so the server looks alive to anything that only asks tmux. The watchdog
+# checks for the claude process itself and restarts what died.
+#
+# On restart the server reclaims the session it last recorded for its folder,
+# conversation included. Its other sessions cannot come back: a session is
+# bound to its server's environment, only one `remote-control` may serve an
+# environment, and a fresh server neither reclaims them nor wakes them on
+# demand (tested with Claude Code 2.1.289). Their transcripts stay on disk.
+#
+# Watched: brain-rc while autostart owns it, plus each server started by
+# `brain repo add|serve` (one marker file each; `brain repo stop` removes it
+# so a stopped repo is not resurrected).
+RC_WATCH_DIR="$BRAIN_STATE_DIR/rc-watch"
+
+rc_watch_mark() {
+  mkdir -p "$RC_WATCH_DIR"
+  touch "$RC_WATCH_DIR/$1"
+}
+
+rc_watch_unmark() { rm -f "$RC_WATCH_DIR/$1"; }
+
+rc_watch_one() {
+  local name="$1" pane pid
+  read -r pane pid <<<"$(tmux list-panes -s -t "=$name" -F '#{pane_id} #{pane_pid}' 2>/dev/null | head -1)"
+  if [ -n "${pid:-}" ] && pgrep -P "$pid" -f claude >/dev/null 2>&1; then
+    return 0
+  fi
+  info "$(date '+%F %T') $name is down — restarting"
+  if [ -n "${pane:-}" ]; then
+    tmux respawn-pane -k -t "$pane"  # reruns the original launch command
+  elif [ "$name" = brain-rc ]; then
+    "$0" rc </dev/null
+  else
+    "$0" repo serve "${name#brain-rc-}" </dev/null
+  fi
+}
+
+cmd_watchdog() {
+  need tmux jq
+  mkdir -p "$BRAIN_STATE_DIR/log"
+  # The main server is watched whenever autostart owns it (it may predate
+  # rc_watch_mark); repo servers are marked by `brain repo add|serve`.
+  svc_is_active rc && rc_watch_mark brain-rc
+  local f
+  for f in "$RC_WATCH_DIR"/*; do
+    [ -f "$f" ] || continue
+    rc_watch_one "$(basename "$f")"
+  done
 }
 
 # ------------------------------------------------------------- multi session
@@ -1312,6 +1369,7 @@ case "${1:-rc}" in
   status)    cmd_status ;;
   expose)    shift; cmd_expose "$@" ;;
   autostart) shift; cmd_autostart "$@" ;;
+  watchdog)  cmd_watchdog ;;
   keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
@@ -1324,6 +1382,6 @@ case "${1:-rc}" in
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
-  help|-h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
