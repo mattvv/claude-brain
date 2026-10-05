@@ -14,6 +14,8 @@
 #   brain autostart  come back automatically after a reboot (enable|disable|status)
 #   brain watchdog   restart RC servers that died, e.g. after sleep, and land
 #                    teleported sessions (run every minute by autostart)
+#   brain attach [w] open a session on this machine in this terminal — list
+#                    recent ones, or pick by words from its title
 #   brain teleport M move this Claude session (code included) to the brain
 #                    on machine M over Taildrop; `teleport log` for history
 #   brain keepawake  stop this machine from sleeping (shows what it will change)
@@ -521,6 +523,9 @@ teleport_drain() {
     [ -f "$f" ] || continue
     case "$(basename "$f")" in
       brain-teleport-ack-*.json) mv "$f" "$TELEPORT_DIR/acks/" ;;
+      brain-teleport-found-*.json) mkdir -p "$TELEPORT_DIR/found"; mv "$f" "$TELEPORT_DIR/found/" ;;
+      brain-teleport-find-*.json|brain-teleport-pull-*.json)
+        mkdir -p "$TELEPORT_DIR/requests"; mv "$f" "$TELEPORT_DIR/requests/" ;;
       brain-teleport-*.tgz)      mv "$f" "$TELEPORT_DIR/inbox/" ;;
       *)
         [ "$(dirname "$f")" = "$in" ] || continue  # never move the user's own files
@@ -861,7 +866,8 @@ teleport_start() {
   elif tmux has-session -t "=brain-teleport-$short" 2>/dev/null; then status=stuck
   else status=failed; fi
   case "$status" in
-    ok)    teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT) — $url" ;;
+    ok)    rm -f "$TELEPORT_DIR/sent/$id"
+  teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT) — $url" ;;
     stuck) teleport_log "$id started in $cwd (account set $BRAIN_ACCOUNT) but never reached claude.ai — look with: tmux attach -t brain-teleport-$short (the original was kept)" ;;
     *)     teleport_log "$id: the resumed session exited right after starting in $cwd (account set $BRAIN_ACCOUNT) — the original was kept" ;;
   esac
@@ -897,7 +903,63 @@ teleport_receive() {
       teleport_log "could not land $(basename "$pkg") (kept in $TELEPORT_DIR/failed)"
     fi
   done
+  local req
+  for req in "$TELEPORT_DIR/requests"/*.json; do
+    [ -f "$req" ] || continue
+    set +e
+    ( set -e; teleport_answer "$req" )
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || teleport_log "could not act on $(jq -r '.from // "?"' "$req" 2>/dev/null)'s $(jq -r '.kind // "request"' "$req" 2>/dev/null) request (see above)"
+    rm -f "$req"
+  done
   teleport_unlock
+}
+
+# Another brain's `brain attach` asking about sessions here:
+#   find  — reply with the sessions matching its words, and their state;
+#   pull  — teleport one of them over (ending the copy here once it lands,
+#           if it was running and the user said so).
+# Only your own devices can Taildrop to this one, so these come from you.
+teleport_answer() {
+  local req="$1" kind from nonce query id end out line mtime sid set cdir t title state pid=""
+  kind="$(jq -r '.kind // ""' "$req")"; from="$(jq -r '.from // ""' "$req")"; nonce="$(jq -r '.nonce // ""' "$req")"
+  case "$from" in ""|*[!A-Za-z0-9._-]*) teleport_log "ignored a request with a bad sender"; return 0 ;; esac
+  case "$nonce" in *[!A-Za-z0-9-]*) teleport_log "ignored a request with a bad nonce"; return 0 ;; esac
+  case "$kind" in
+    find)
+      query="$(jq -r '.query // ""' "$req")"
+      out="$(mktemp -d)"
+      { attach_find "$query" | head -n 10 | while IFS="$(printf '\t')" read -r mtime sid set cdir t title; do
+          jq -cn --arg id "$sid" --arg title "$title" --arg cwd "$(attach_cwd "$t")" --arg set "$set" \
+            --arg state "$(attach_state "$sid" "$cdir")" --argjson mtime "$mtime" \
+            '{id: $id, title: $title, cwd: $cwd, set: $set, state: $state, mtime: $mtime}'
+        done; } | jq -s --arg host "$(teleport_self)" --arg nonce "$nonce" \
+          '{host: $host, nonce: $nonce, sessions: .}' > "$out/brain-teleport-found-$nonce.json"
+      tailscale file cp "$out/brain-teleport-found-$nonce.json" "$from:" >/dev/null 2>&1 \
+        || teleport_log "could not answer $from's search"
+      teleport_log "answered $from's search for '$query' ($(jq '.sessions | length' "$out/brain-teleport-found-$nonce.json") found)"
+      rm -rf "$out"
+      ;;
+    pull)
+      id="$(jq -r '.id // ""' "$req")"; end="$(jq -r '.end // false' "$req")"
+      case "$id" in ""|*[!A-Za-z0-9-]*) teleport_log "ignored a pull with a bad id"; return 0 ;; esac
+      line="$(attach_find "$id" | head -n 1)"
+      [ -n "$line" ] || { teleport_log "$from asked for $id, which isn't here"; return 0; }
+      IFS="$(printf '\t')" read -r mtime sid set cdir t title <<<"$line"
+      state="$(attach_state "$id" "$cdir")"
+      case "$state" in
+        closed) ;;
+        *) if [ "$end" != true ]; then teleport_log "$from asked for $id, but it's running here ($state) — left it"; return 0; fi
+           pid="${state#*:}"
+           # A tmux-hosted session's record names the claude process too.
+           case "$state" in tmux:*) pid="$(jq -r .pid "$(attach_live_record "$id" "$cdir")")" ;; esac ;;
+      esac
+      teleport_log "$from asked for $id ('$title') — sending it"
+      teleport_send "$from" "$id" "$pid"
+      ;;
+    *) teleport_log "ignored an unknown request: $kind" ;;
+  esac
 }
 
 # End the original session's process and say whether it went: SIGTERM, then
@@ -965,20 +1027,30 @@ cmd_teleport() {
   tailscale file cp --targets 2>/dev/null | awk -v h="$host" '$2 == h { f = 1 } END { exit !f }' \
     || die "$host is not a Taildrop target here (see: tailscale file cp --targets)"
 
-  local out nonce
+  local end_pid=""
+  # Inside the session being teleported: end it once the target confirms.
+  if [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] && [ -n "${CLAUDE_PID:-}" ]; then end_pid="$CLAUDE_PID"; fi
+  teleport_send "$host" "$id" "$end_pid"
+  ok "sent to $host — it lands within a minute and appears on claude.ai under $host"
+  [ -z "$end_pid" ] || info "this session ends once $host confirms (up to 10 minutes; else it stays open)"
+}
+
+# teleport_send HOST ID [END_PID] — pack session ID and Taildrop it to HOST;
+# with END_PID, end that process once HOST confirms the landing. Records
+# where the session went, so `brain attach` here knows it lives there now.
+teleport_send() {
+  local host="$1" id="$2" end_pid="${3:-}" out nonce
   out="$(mktemp -d)"
-  nonce="$(date +%s)-$$-$RANDOM"
+  nonce="${BRAIN_TELEPORT_NONCE:-$(date +%s)-$$-$RANDOM}"
   rm -f "$TELEPORT_DIR/acks/brain-teleport-ack-$id"*.json
   BRAIN_TELEPORT_NONCE="$nonce" teleport_pack "$id" "$out"
   tailscale file cp "$out/brain-teleport-$id.tgz" "$host:" || die "Taildrop to $host failed"
   rm -rf "$out"
+  mkdir -p "$TELEPORT_DIR/sent"
+  printf '%s %s\n' "$host" "$(date +%s)" > "$TELEPORT_DIR/sent/$id"
   teleport_log "sent $id to $host"
-  ok "sent to $host — it lands within a minute and appears on claude.ai under $host"
-
-  # Inside the session being teleported: end it once the target confirms.
-  if [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] && [ -n "${CLAUDE_PID:-}" ]; then
-    nohup "$0" teleport _await "$id" "$CLAUDE_PID" "$nonce" >/dev/null 2>&1 &
-    info "this session ends once $host confirms (up to 10 minutes; else it stays open)"
+  if [ -n "$end_pid" ]; then
+    nohup "$SCRIPT_DIR/brain" teleport _await "$id" "$end_pid" "$nonce" >/dev/null 2>&1 &
   fi
 }
 
@@ -2295,6 +2367,280 @@ cmd_account() {
   esac
 }
 
+# ------------------------------------------------------------------ attach
+# `brain attach [words]`: get a terminal onto a Claude session on this machine
+# — one started from claude.ai, teleported in, or closed by accident — under
+# the account set it belongs to (it lives in that set's Claude dir, so that's
+# where it's looked for and which login it reopens with).
+#
+#   closed               resume it in its directory with --remote-control,
+#                        inside tmux (brain-open-<id8>) so closing the
+#                        terminal doesn't end it; attach to that.
+#   in tmux              attach.
+#   headless on a server end that copy (asked first), then resume as above.
+#                        It gets a new claude.ai link: a running session
+#                        can't be handed between processes.
+#   in another terminal  refuse — the same conversation twice diverges.
+ATTACH_LIST_MAX="${BRAIN_ATTACH_LIST_MAX:-15}"
+
+# One TSV line per recent conversation, newest first:
+#   mtime  id  set  claude-dir  transcript
+attach_candidates() {
+  local d set t
+  for d in "$HOME/.claude" "$HOME"/.claude-*; do
+    [ -d "$d/projects" ] || continue
+    if [ "$d" = "$HOME/.claude" ]; then set=default; else set="${d#"$HOME"/.claude-}"; fi
+    for t in "$d"/projects/*/*.jsonl; do
+      [ -f "$t" ] || continue
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(file_mtime "$t")" "$(basename "$t" .jsonl)" "$set" "$d" "$t"
+    done
+  done | sort -rn | awk -F '\t' '!seen[$2]++'  # a teleported session has a copy per folder: newest wins
+}
+
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
+# The session record of a live process for conversation $1 in claude dir $2.
+attach_live_record() {
+  local f
+  for f in "$2"/sessions/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.sessionId // ""' "$f" 2>/dev/null)" = "$1" ] || continue
+    kill -0 "$(jq -r '.pid' "$f")" 2>/dev/null && { printf '%s\n' "$f"; return 0; }
+  done
+  return 1
+}
+
+# The title the user sees: one they set, else Claude's. grep first — these
+# files run to megabytes and only the title lines matter.
+attach_title() {
+  local t
+  t="$(grep '"type":"custom-title"' "$1" 2>/dev/null | tail -n 1 | jq -r '.customTitle // empty' 2>/dev/null || true)"
+  [ -n "$t" ] || t="$(grep '"type":"ai-title"' "$1" 2>/dev/null | tail -n 1 | jq -r '.aiTitle // empty' 2>/dev/null || true)"
+  printf '%s\n' "$t"
+}
+
+attach_cwd() { jq -rn 'first(inputs | select(.cwd != null) | .cwd)' "$1" 2>/dev/null || true; }
+
+attach_when() { date -r "$1" '+%b %d %H:%M' 2>/dev/null || date -d "@$1" '+%b %d %H:%M'; }
+
+# closed | tmux:<session> | headless:<pid> | terminal:<pid>
+attach_state() {
+  local rec tm
+  rec="$(attach_live_record "$1" "$2")" || { echo closed; return; }
+  tm="$(jq -r '.tmux // ""' "$rec")"
+  if [ -n "$tm" ] && [ "$(jq -r '.entrypoint // ""' "$rec")" != sdk-cli ]; then
+    echo "tmux:${tm%%:*}"
+  elif [ "$(jq -r '.entrypoint // ""' "$rec")" = sdk-cli ]; then
+    echo "headless:$(jq -r .pid "$rec")"
+  else
+    echo "terminal:$(jq -r .pid "$rec")"
+  fi
+}
+
+attach_state_text() {
+  case "$1" in
+    closed)      echo "closed" ;;
+    tmux:*)      echo "running (tmux ${1#tmux:})" ;;
+    headless:*)  echo "running on a brain server" ;;
+    terminal:*)  echo "open in a terminal" ;;
+  esac
+}
+
+cmd_attach() {
+  local query="" yes=0 a
+  for a in "$@"; do
+    case "$a" in
+      -y|--yes) yes=1 ;;
+      _launch) shift; attach_launch "$@"; return ;;
+      -h|--help) die "usage: brain attach [words from the title | session id] [--yes]" ;;
+      *) query="${query:+$query }$a" ;;
+    esac
+  done
+  need jq tmux
+
+  local mtime id set cdir t title cwd state n=0 matches="" hits=0 tab away
+  tab="$(printf '\t')"
+  if [ -z "$query" ]; then
+    printf '%s\n' "${C_BOLD}recent sessions${C_RESET} (open one: brain attach <words from its title>)"
+    while IFS="$tab" read -r mtime id set cdir t; do
+      n=$((n+1)); [ "$n" -le "$ATTACH_LIST_MAX" ] || break
+      title="$(attach_title "$t")"
+      printf '  %s  %-44.44s  %-8s %s\n      %s  %s\n' "$(attach_when "$mtime")" "${title:-(untitled)}" \
+        "$set" "$(attach_state_text "$(attach_state "$id" "$cdir")")" "${id:0:8}" "$(attach_cwd "$t")"
+    done < <(attach_candidates)
+    return 0
+  fi
+
+  matches="$(attach_find "$query")"
+  hits="$(printf '%s' "$matches" | grep -c . || true)"
+  if [ "$hits" -eq 0 ]; then
+    # Not here: maybe it lives on another of your brains.
+    attach_remote "$query" "" "$yes"; return
+  fi
+  if [ "$hits" -gt 1 ]; then
+    warn "'$query' matches $hits sessions — use more words or an id:"
+    printf '%s\n' "$matches" | head -n 10 | while IFS="$tab" read -r mtime id set cdir t title; do
+      printf '  %s  %-8s %s\n' "${id:0:8}" "$set" "${title:-(untitled)}"
+    done
+    exit 1
+  fi
+  IFS="$tab" read -r mtime id set cdir t title <<<"$matches"
+  # Teleported away since this copy was last written: the live one is there.
+  away="$(teleport_away "$id" "$mtime")"
+  if [ -n "$away" ] && [ "$(attach_state "$id" "$cdir")" = closed ]; then
+    info "\"${title:-$id}\" was teleported to $away — this machine's copy is older."
+    attach_remote "$id" "$away" "$yes"; return
+  fi
+  cwd="$(attach_cwd "$t")"
+  state="$(attach_state "$id" "$cdir")"
+
+  case "$state" in
+    tmux:*)
+      attach_tmux "${state#tmux:}"; return ;;
+    terminal:*)
+      die "\"${title:-$id}\" is open in a terminal already (pid ${state#terminal:}, tty $(ps -o tty= -p "${state#terminal:}" 2>/dev/null | tr -d ' ')) — use that one, or close it first" ;;
+    headless:*)
+      info "\"${title:-$id}\" is running on a brain server, with no terminal to attach to."
+      info "To open it here, that copy is ended and the conversation resumed in this terminal — same history, new claude.ai link."
+      if [ "$yes" -eq 0 ]; then
+        [ -t 0 ] || die "not a terminal to ask in — rerun with --yes to go ahead"
+        printf 'Go ahead? [y/N] '; read -r a
+        case "$a" in y|Y|yes) ;; *) info "left it running"; return 0 ;; esac
+      fi
+      teleport_end "${state#headless:}"
+      ;;
+  esac
+  [ -d "$cwd" ] || die "its directory is gone: $cwd"
+  # Launch as the set the conversation belongs to (paths resolve per process).
+  if [ "$set" = "$BRAIN_ACCOUNT" ]; then
+    attach_launch "$id" "$cwd" "$title"
+  else
+    env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$set" "$SCRIPT_DIR/brain" attach _launch "$id" "$cwd" "$title"
+  fi
+}
+
+# Sessions here matching QUERY (an id prefix, or words from the title,
+# case-insensitive), newest first: mtime id set claude-dir transcript title.
+attach_find() {
+  local q mtime id set cdir t title tab
+  tab="$(printf '\t')"
+  q="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  while IFS="$tab" read -r mtime id set cdir t; do
+    title="$(attach_title "$t")"
+    case "$id" in
+      "$1"*) ;;
+      *) case "$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]')" in *"$q"*) ;; *) continue ;; esac ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$mtime" "$id" "$set" "$cdir" "$t" "$title"
+  done < <(attach_candidates)
+}
+
+# The machine session $1 was teleported to, if that happened after this
+# copy was last written ($2, epoch seconds).
+teleport_away() {
+  local f="$TELEPORT_DIR/sent/$1" host when
+  [ -f "$f" ] || return 0
+  read -r host when < "$f"
+  [ "${when:-0}" -ge "$(( $2 - 5 ))" ] && printf '%s\n' "$host"
+  return 0
+}
+
+teleport_online_peers() {
+  tailscale file cp --targets 2>/dev/null | awk '$0 !~ /offline/ { print $2 }'
+}
+
+# attach_remote QUERY [HOST] YES — ask other brains (or just HOST) for the
+# session, offer to bring it over, wait for it to land, attach.
+attach_remote() {
+  local query="$1" only="$2" yes="$3" peers h nonce req i got want n all line host id title state cwd ask end=false a
+  need tailscale
+  if [ -n "$only" ]; then peers="$only"; else peers="$(teleport_online_peers)"; fi
+  [ -n "$peers" ] || die "no session matches '$query' here, and no other brain is online to ask"
+  nonce="${BRAIN_ATTACH_NONCE:-$(date +%s)-$$-$RANDOM}"
+  req="$(mktemp -d)"
+  jq -n --arg from "$(teleport_self)" --arg nonce "$nonce" --arg query "$query" \
+    '{kind: "find", from: $from, nonce: $nonce, query: $query}' > "$req/brain-teleport-find-$nonce.json"
+  want=0
+  for h in $peers; do
+    tailscale file cp "$req/brain-teleport-find-$nonce.json" "$h:" >/dev/null 2>&1 && want=$((want+1))
+  done
+  [ "$want" -gt 0 ] || die "could not reach $(echo $peers | tr ' ' ',') over Taildrop"
+  info "asking $(echo $peers | sed 's/ /, /g') for '$query' — their watchdog answers within a minute…"
+  mkdir -p "$TELEPORT_DIR/found"
+  got=0
+  for i in $(seq "${BRAIN_ATTACH_WAIT:-100}"); do
+    if teleport_lock; then teleport_drain; teleport_unlock; fi
+    got="$(find "$TELEPORT_DIR/found" -name "brain-teleport-found-$nonce*.json" | grep -c . || true)"
+    [ "$got" -ge "$want" ] && break
+    sleep 1
+  done
+  all="$(find "$TELEPORT_DIR/found" -name "brain-teleport-found-$nonce*.json" -exec cat {} + 2>/dev/null \
+    | jq -cs '[.[] | .host as $h | .sessions[] | . + {host: $h}]')"
+  rm -f "$TELEPORT_DIR/found/brain-teleport-found-$nonce"*.json
+  n="$(jq length <<<"${all:-[]}")"
+  if [ "${n:-0}" -eq 0 ]; then
+    [ "$got" -ge "$want" ] && die "no session matches '$query' here or on $(echo $peers | sed 's/ /, /g')"
+    die "no session matches '$query' here; $((want - got)) brain(s) didn't answer (brain update there, and is its watchdog on?)"
+  fi
+  if [ "$n" -gt 1 ]; then
+    warn "'$query' matches $n sessions on other machines — use more words or an id:"
+    jq -r '.[] | "  \(.id[0:8])  \(.host)  \(.title // "(untitled)")  [\(.state | split(":")[0])]"' <<<"$all"
+    exit 1
+  fi
+  line="$(jq -c '.[0]' <<<"$all")"
+  host="$(jq -r .host <<<"$line")"; id="$(jq -r .id <<<"$line")"
+  title="$(jq -r '.title // ""' <<<"$line")"; state="$(jq -r .state <<<"$line")"; cwd="$(jq -r .cwd <<<"$line")"
+  case "$state" in
+    closed) ask="\"${title:-$id}\" is on $host (closed there, in $cwd). Bring it over here?" ;;
+    *)      ask="\"${title:-$id}\" is running on $host ($(attach_state_text "$state")). End it there and bring it over here?"; end=true ;;
+  esac
+  if [ "$yes" -eq 0 ]; then
+    [ -t 0 ] || die "$ask — rerun with --yes to go ahead"
+    printf '%s [y/N] ' "$ask"; read -r a
+    case "$a" in y|Y|yes) ;; *) info "left it on $host"; return 0 ;; esac
+  fi
+  jq -n --arg from "$(teleport_self)" --arg nonce "$nonce" --arg id "$id" --argjson end "$end" \
+    '{kind: "pull", from: $from, nonce: $nonce, id: $id, end: $end}' > "$req/brain-teleport-pull-$nonce.json"
+  tailscale file cp "$req/brain-teleport-pull-$nonce.json" "$host:" >/dev/null 2>&1 || die "could not reach $host"
+  rm -rf "$req"
+  info "asked $host to send it — it arrives in a minute or two…"
+  for i in $(seq "${BRAIN_ATTACH_LAND_WAIT:-240}"); do
+    teleport_receive
+    if tmux has-session -t "=brain-teleport-${id:0:8}" 2>/dev/null; then
+      attach_tmux "brain-teleport-${id:0:8}"; return
+    fi
+    if ls "$TELEPORT_DIR/failed/brain-teleport-$id"* >/dev/null 2>&1; then
+      die "it arrived but couldn't land — see: brain teleport log"
+    fi
+    sleep 1
+  done
+  die "it hasn't arrived yet — it will land on its own; then run: brain attach ${id:0:8}"
+}
+
+# attach_launch ID DIR TITLE — resume in tmux as this set, then attach.
+attach_launch() {
+  local id="$1" cwd="$2" title="$3" s inner
+  s="brain-open-${id:0:8}"
+  seed_trust "$cwd"
+  if ! tmux has-session -t "=$s" 2>/dev/null; then
+    inner="$(claude_bin) --resume $(printf %q "$id") --remote-control $(printf %q "${title:-${id:0:8}}")"
+    tmux new-session -d -s "$s" "cd $(printf %q "$cwd") && exec $(claude_account_env) bash -c $(printf %q "$inner")"
+    ok "resumed \"${title:-$id}\" (account set $BRAIN_ACCOUNT) in $cwd"
+  fi
+  attach_tmux "$s"
+}
+
+# Attach to tmux session $1 — or, from inside tmux, switch to it.
+attach_tmux() {
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    info "running in tmux session $1 — attach from a terminal: tmux attach -t $1"
+    return 0
+  fi
+  info "detach with Ctrl-b d — it keeps running (and stays on claude.ai); brain attach brings you back"
+  if [ -n "${TMUX:-}" ]; then exec tmux switch-client -t "=$1"; fi
+  exec tmux attach -t "=$1"
+}
+
 # ----------------------------------------------------------------- dispatch
 # `--account NAME` (anywhere on the line) runs the command for that account
 # set. It re-execs so lib/common.sh resolves every path for the set up front;
@@ -2344,6 +2690,7 @@ case "${1:-rc}" in
   autostart) shift; cmd_autostart "$@" ;;
   watchdog)  cmd_watchdog ;;
   teleport)  shift; cmd_teleport "$@" ;;
+  attach)    shift; cmd_attach "$@" ;;
   keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
   account)   shift; cmd_account "$@" ;;
@@ -2357,6 +2704,6 @@ case "${1:-rc}" in
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
-  help|-h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac

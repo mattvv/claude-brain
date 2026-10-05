@@ -353,18 +353,18 @@ check "a round trip keeps one id suffix on the folder" \
 
 # The waiter ends the original once the receipt (with this send's nonce) is in.
 DA="$TMP/dsta"; mkdir -p "$DA/.local/state/brain/teleport/acks"
-sleep 300 & ORIG=$!
+sleep 300 & ORIG=$!; disown "$ORIG"
 echo '{"id":"x","host":"far","status":"ok","nonce":"n1"}' > "$DA/.local/state/brain/teleport/acks/brain-teleport-ack-x.json"
 HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await x "$ORIG" n1 >/dev/null 2>&1
 check "the original session is ended, and the log says so" \
   '! kill -0 "$ORIG" 2>/dev/null && grep -q "original session (pid $ORIG) ended" "$DA/.local/state/brain/teleport/log"'
-bash -c 'trap "" TERM; while :; do sleep 1; done' & STUBBORN=$!
+bash -c 'trap "" TERM; while :; do sleep 1; done' & STUBBORN=$!; disown "$STUBBORN"
 echo '{"id":"y","host":"far","status":"ok","nonce":"n2"}' > "$DA/.local/state/brain/teleport/acks/brain-teleport-ack-y.json"
 HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await y "$STUBBORN" n2 >/dev/null 2>&1
 sleep 1
 check "one that ignores SIGTERM is killed, and the log says so" \
   '! kill -0 "$STUBBORN" 2>/dev/null && grep -q "pid $STUBBORN) ignored SIGTERM" "$DA/.local/state/brain/teleport/log"'
-kill -9 "$ORIG" "$STUBBORN" 2>/dev/null; wait 2>/dev/null
+kill -9 "$ORIG" "$STUBBORN" 2>/dev/null
 
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"

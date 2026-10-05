@@ -36,6 +36,13 @@ and never by touching this machine's firewall settings):
 - If expose says Tailscale isn't set up, offer to link it with `brain auth tailscale`
   and relay the approval URL.
 
+**Move or reopen sessions**: `brain teleport <machine>` moves the current session
+(conversation, branch, uncommitted work) to the brain on another of the user's machines —
+run it when they ask to "teleport this to X". `brain attach [words]` lists this machine's
+sessions or reopens one in a terminal under the right account set, bringing it over from
+another brain if that's where it lives. It's interactive (tmux), so give the user the
+command to type rather than running it for them.
+
 **Set up repos for phone sessions**: `brain repo add <owner/name>` clones a repo and
 starts a Remote Control server for it, so its sessions appear in the Claude app.
 `brain repo ls` / `brain repo stop <name>`. If the user already has the repo checked out
