@@ -91,7 +91,7 @@ mkdir -p "$DST/.claude/sessions"
 printf '{"pid":2,"sessionId":"%s","bridgeSessionId":"session_01LANDED"}\n' "$ID" > "$DST/.claude/sessions/2.json"
 : > "$LOG"
 URL="$(HOME="$DST" FAKE_HOST=dst-host BRAIN_TELEPORT_WAIT=2 "${BASH:-bash}" "$BRAIN" teleport _land "$PKG")"
-WT="$DST/repos/.teleport/proj-11111111"
+WT="$DST/repos/proj/.claude/worktrees/teleport-11111111"
 check "worktree created" '[ -d "$WT/app" ]'
 eq "unpushed commit arrived" "$UNPUSHED" "$(git -C "$WT" rev-parse HEAD)"
 eq "branch recreated (it did not exist here)" feature "$(git -C "$WT" symbolic-ref --short HEAD)"
@@ -128,7 +128,7 @@ eq "falls back to the repo name" proj "$(jq -r .name "$TMP/peek2/manifest.json")
 DST2="$TMP/dst2"; git clone -q "$ORIGIN" "$DST2/repos/proj" 2>/dev/null
 git -C "$DST2/repos/proj" branch -q feature origin/main   # someone's own branch by that name
 HOME="$DST2" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$OUT2/brain-teleport-$ID.tgz" >/dev/null
-WT2="$DST2/repos/.teleport/proj-11111111"
+WT2="$DST2/repos/proj/.claude/worktrees/teleport-11111111"
 eq "lands at the pushed commit" "$UNPUSHED" "$(git -C "$WT2" rev-parse HEAD)"
 check "an existing local branch is never moved" \
   '[ "$(git -C "$DST2/repos/proj" rev-parse feature)" = "$(git -C "$DST2/repos/proj" rev-parse origin/main)" ] && ! git -C "$WT2" symbolic-ref -q HEAD >/dev/null'
@@ -175,10 +175,33 @@ echo mine > "$DD/Downloads/brain-teleport-notes.txt"
 echo mine > "$DD/Downloads/report.pdf"
 HOME="$DD" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
 check "a package saved to Downloads is landed" \
-  '[ -d "$DD/repos/.teleport/proj-11111111" ] && [ -f "$DD/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ] && [ ! -e "$DD/Downloads/brain-teleport-$ID.tgz" ]'
+  '[ -d "$DD/repos/proj/.claude/worktrees/teleport-11111111" ] && [ -f "$DD/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ] && [ ! -e "$DD/Downloads/brain-teleport-$ID.tgz" ]'
 check "a receipt saved to Downloads is collected" '[ -f "$DD/.local/state/brain/teleport/acks/brain-teleport-ack-x.json" ]'
 check "the user's own Downloads are left alone" \
   '[ -f "$DD/Downloads/report.pdf" ] && [ -f "$DD/Downloads/brain-teleport-notes.txt" ]'
+
+echo "== landing where the repo lives here =="
+# The target keeps this repo somewhere of its own (~/Documents/work/proj, not
+# ~/repos): the worktree goes inside that checkout, out of its git status.
+DH="$TMP/dsth"; git clone -q "$ORIGIN" "$DH/Documents/work/proj" 2>/dev/null
+: > "$LOG"
+HOME="$DH" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKG" >/dev/null 2>&1
+HWT="$DH/Documents/work/proj/.claude/worktrees/teleport-11111111"
+check "found the checkout outside ~/repos and worked inside it" '[ -d "$HWT/app" ] && [ ! -e "$DH/repos/proj" ]'
+eq "with the session's code" v3 "$(cat "$HWT/app/edit.txt" 2>/dev/null)"
+eq "the hosting checkout's status stays clean" "" "$(git -C "$DH/Documents/work/proj" status --porcelain)"
+check "started there" 'tr -d "\\\\" < "$LOG" | grep -q "cd $(cd -P "$HWT/app" && pwd) "'
+
+echo "== a non-repo session finds its folder =="
+DF="$TMP/dstf"; mkdir -p "$DF/notes"; echo keep > "$DF/notes/mine.txt"
+HOME="$DF" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$OUT3/brain-teleport-$NID.tgz" >/dev/null 2>&1
+FSLUG="$(printf '%s' "$(cd -P "$DF/notes" && pwd)" | sed 's|[^A-Za-z0-9]|-|g')"
+check "lands in the same folder under home" '[ -f "$DF/.claude/projects/$FSLUG/$NID.jsonl" ] && [ ! -e "$DF/repos/.teleport" ]'
+check "and leaves its files alone" '[ "$(cat "$DF/notes/mine.txt")" = keep ]'
+DF2="$TMP/dstf2"; mkdir -p "$DF2/stuff/notes"
+HOME="$DF2" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$OUT3/brain-teleport-$NID.tgz" >/dev/null 2>&1
+FSLUG2="$(printf '%s' "$(cd -P "$DF2/stuff/notes" && pwd)" | sed 's|[^A-Za-z0-9]|-|g')"
+check "else a folder with that name" '[ -f "$DF2/.claude/projects/$FSLUG2/$NID.jsonl" ]'
 
 echo "== account sets =="
 # A session in the "work" set lives in ~/.claude-work and must land there,
@@ -199,14 +222,14 @@ DW="$TMP/dstw"; git clone -q "$ORIGIN" "$DW/repos/proj" 2>/dev/null
 check "refused where there is no work set" \
   '! HOME="$DW" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGW" >/dev/null 2>&1'
 check "nothing built or started when refused" \
-  '[ ! -e "$DW/repos/.teleport/proj-aaaaaaaa" ] && ! grep -q new-session "$LOG"'
+  '[ ! -e "$DW/repos/proj/.claude/worktrees/teleport-aaaaaaaa" ] && ! grep -q new-session "$LOG"'
 check "nothing filed in the default set" '[ -z "$(ls "$DW/.claude/projects" 2>/dev/null)" ]'
 
 mkdir -p "$DW/.config/brain/accounts/work" "$DW/.claude-work/sessions"
 echo PORT=8318 > "$DW/.config/brain/accounts/work/account"
 printf '{"pid":4,"sessionId":"%s","bridgeSessionId":"session_01WORK"}\n' "$WID" > "$DW/.claude-work/sessions/4.json"
 URLW="$(HOME="$DW" BRAIN_TELEPORT_WAIT=2 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGW")"
-WWT="$(cd -P "$DW/repos/.teleport/proj-aaaaaaaa/app" && pwd)"
+WWT="$(cd -P "$DW/repos/proj/.claude/worktrees/teleport-aaaaaaaa/app" && pwd)"
 WSLUG="$(printf '%s' "$WWT" | sed 's|[^A-Za-z0-9]|-|g')"
 check "filed in the work set's Claude dir" '[ -f "$DW/.claude-work/projects/$WSLUG/$WID.jsonl" ]'
 check "not in the default set's" '[ ! -e "$DW/.claude/projects/$WSLUG" ]'
@@ -272,14 +295,14 @@ check "its own settings survive" 'jq -e ".oauthAccount.accountUuid == \"U-WORK\"
 check "alive but no link is reported stuck, not landed" \
   'grep -q "never reached claude.ai" "$DI/.local/state/brain/teleport/log" && ! grep -q "landed $IID" "$DI/.local/state/brain/teleport/log"'
 check "teleporting the same session again replaces the old copy" \
-  'grep -q "tmux kill-session -t =brain-teleport-12121212" "$LOG" && grep -q "new-session" "$LOG" && [ "$(ls -d "$DI"/repos/.teleport/proj-12121212* | wc -l | tr -d " ")" = 2 ]'
+  'grep -q "tmux kill-session -t =brain-teleport-12121212" "$LOG" && grep -q "new-session" "$LOG" && [ "$(ls -d "$DI"/repos/proj/.claude/worktrees/teleport-12121212* | wc -l | tr -d " ")" = 2 ]'
 
 DN="$TMP/dstn"; git clone -q "$ORIGIN" "$DN/repos/proj" 2>/dev/null
 echo '{"oauthAccount":{"accountUuid":"U-PERSONAL","organizationUuid":"O-ME"}}' > "$DN/.claude.json"
 : > "$LOG"
 check "refused when no set here has that login" \
   '! HOME="$DN" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGI" >/dev/null 2>&1'
-check "nothing built or started" '[ ! -e "$DN/repos/.teleport/proj-12121212" ] && ! grep -q new-session "$LOG"'
+check "nothing built or started" '[ ! -e "$DN/repos/proj/.claude/worktrees/teleport-12121212" ] && ! grep -q new-session "$LOG"'
 check "the log names the login" 'grep -q "signed in as me@work.example" "$DN/.local/state/brain/teleport/log"'
 
 echo "== retry after creating the set =="
@@ -352,7 +375,7 @@ mkdir -p "$DST3/.claude/sessions"
 printf '{"pid":9,"sessionId":"%s","bridgeSessionId":"session_01RECV"}\n' "$ID" > "$DST3/.claude/sessions/9.json"
 HOME="$DST3" FAKE_INBOX="$DST3/inbox-src" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
 check "package landed and archived" \
-  '[ -d "$DST3/repos/.teleport/proj-11111111" ] && [ -f "$DST3/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ]'
+  '[ -d "$DST3/repos/proj/.claude/worktrees/teleport-11111111" ] && [ -f "$DST3/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ]'
 check "an ordinary Taildrop file goes to ~/Downloads" '[ -f "$DST3/Downloads/holiday.jpg" ]'
 check "landing is logged" 'grep -q "landed $ID" "$DST3/.local/state/brain/teleport/log"'
 

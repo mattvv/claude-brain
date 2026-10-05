@@ -137,12 +137,15 @@ mid-conversation, with its code:
 - **The conversation** — the whole transcript, so the session remembers everything.
 - **The code, exactly as it is** — branch, unpushed commits, and uncommitted and untracked
   changes. Your checkout is never touched; the work is rebuilt on the other machine in a
-  fresh git worktree under `~/repos/.teleport/` (cloning the repo there first if needed).
+  fresh git worktree *inside the checkout that already hosts the repo there* — say
+  `~/Documents/navigate/core/.claude/worktrees/teleport-…` — found by its origin wherever
+  it lives (cloned into `~/repos/` first if that machine doesn't have it).
 
 Within about a minute it shows up in the Claude app under the other machine, ready to carry
 on. Once that machine confirms, the original session closes; if no confirmation comes back
 within ten minutes, the original simply stays open. A session started outside a git repo
-moves its conversation only and lands in an empty folder.
+moves its conversation only, and lands in the same folder on the other machine (same path
+under home, else a folder with that name) — or an empty one if there's no match.
 
 It travels over Taildrop, Tailscale's file sharing between your own devices — no ports, no
 SSH. To set up a machine to **receive** sessions (once):

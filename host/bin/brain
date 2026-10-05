@@ -460,10 +460,15 @@ cmd_watchdog() {
 #   send    the package over Taildrop — no new ports, no SSH, and only your
 #           own devices can send to you.
 #   land    on the target (its watchdog collects packages every minute): find
-#           or clone the repo, rebuild the exact code state in a fresh git
-#           worktree, put the conversation where `claude --resume` looks for
-#           that directory, and start it with Remote Control so it shows up
-#           on claude.ai under the target machine.
+#           the checkout that hosts the repo there (workspace, ~/repos, else a
+#           shallow search of home) or clone it, rebuild the exact code state
+#           in a fresh git worktree inside that checkout
+#           (<clone>/.claude/worktrees/teleport-<id8>, where Claude Code keeps
+#           its own worktrees), put the conversation where `claude --resume`
+#           looks for that directory, and start it with Remote Control so it
+#           shows up on claude.ai under the target machine. A session outside
+#           any repo lands in the same folder there (same path under home, else
+#           a folder of that name), or an empty one if there is none.
 #   account the session stays on the same Claude account: it lands in the
 #           target's set that is signed in to the same account and org (set
 #           names differ between machines — "default" may be work on one and
@@ -627,14 +632,25 @@ teleport_pack() {
     --arg head "$head" --arg wip "$wip" --arg branch "$branch" --arg root "$root" \
     --arg rel "$rel" --arg name "${name:-$(basename "$root")}" --arg account "$acct" \
     --arg title "$title" --argjson identity "$identity" --arg nonce "${BRAIN_TELEPORT_NONCE:-}" \
+    --arg home "$HOME" \
     '{v: 1, id: $id, from: $from, remote: $remote, head: $head, wip: $wip,
       branch: $branch, root: $root, rel: $rel, name: $name, account: $account,
-      title: $title, identity: $identity, nonce: $nonce}' > "$work/pkg/manifest.json"
+      title: $title, identity: $identity, nonce: $nonce, home: $home}' > "$work/pkg/manifest.json"
   tar czf "$out/brain-teleport-$id.tgz" -C "$work/pkg" .
   rm -rf "$work"
 }
 
-# A local clone of REMOTE: the workspace or any ~/repos/* with the same origin.
+# Git checkouts under home, shallowly: skips hidden dirs, node_modules and
+# ~/Library, and never descends into a checkout.
+teleport_home_checkouts() {
+  find "$HOME" -maxdepth "${BRAIN_TELEPORT_SCAN_DEPTH:-4}" \
+    \( -name .git -type d -print -prune \) -o \
+    \( \( -name '.?*' -o -name node_modules -o -path "$HOME/Library" \) -prune \) 2>/dev/null \
+    | sed 's|/\.git$||'
+}
+
+# A local clone of REMOTE: the workspace, any ~/repos/* (which may link to a
+# checkout elsewhere), else any checkout under home with the same origin.
 teleport_find_repo() {
   local want d
   want="$(teleport_norm_remote "$1")"
@@ -643,13 +659,36 @@ teleport_find_repo() {
     [ "$(teleport_norm_remote "$(git -C "$d" remote get-url origin 2>/dev/null || true)")" = "$want" ] \
       && { printf '%s\n' "$d"; return 0; }
   done
+  while IFS= read -r d; do
+    [ "$(teleport_norm_remote "$(git -C "$d" remote get-url origin 2>/dev/null || true)")" = "$want" ] \
+      && { printf '%s\n' "$d"; return 0; }
+  done <<EOF
+$(teleport_home_checkouts)
+EOF
   return 1
+}
+
+# The folder here that matches a session's non-repo directory $1 (the sender's
+# home was $2): the same path under this home, else the first folder with that
+# name. Nothing printed when neither exists.
+teleport_find_folder() {
+  local root="$1" shome="$2" relh d name
+  case "$root" in
+    "$shome"/*) relh="${root#"$shome"/}"
+                [ -d "$HOME/$relh" ] && { printf '%s\n' "$HOME/$relh"; return 0; } ;;
+  esac
+  name="$(basename "$root")"
+  d="$(find "$HOME" -maxdepth "${BRAIN_TELEPORT_SCAN_DEPTH:-4}" \
+        \( -name '.?*' -o -name node_modules -o -path "$HOME/Library" \) -prune -o \
+        -type d -name "$name" -print 2>/dev/null | sed -n 1p)"
+  [ -n "$d" ] && printf '%s\n' "$d"
+  return 0
 }
 
 # teleport_land PKG — rebuild the session described by PKG and start it.
 # Prints the new claude.ai link (empty if it did not show up in time).
 teleport_land() {
-  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct base
+  local pkg="$1" x m id remote head wip branch root rel repo host short wt cwd acct base
   x="$(mktemp -d)"
   tar xzf "$pkg" -C "$x"
   m="$x/manifest.json"
@@ -658,15 +697,17 @@ teleport_land() {
   rel="$(jq -r .rel "$m")"
   case "$id" in *[!A-Za-z0-9-]*|"") die "bad session id in $pkg" ;; esac
   short="${id:0:8}"
-  mkdir -p "$REPOS_DIR/.teleport"
 
   if [ -z "$remote" ]; then
     acct="$(teleport_choose_account "$m" "")"
-    # A session teleported back and forth already sits in "<dir>-<id8>";
-    # don't stack another suffix on each trip.
-    base="$(basename "$root")"; base="${base%%-"$short"*}"
-    wt="$REPOS_DIR/.teleport/$base-$short"
-    mkdir -p "$wt"
+    wt="$(teleport_find_folder "$root" "$(jq -r '.home // ""' "$m")")"
+    if [ -z "$wt" ]; then
+      # A session teleported back and forth already sits in "<dir>-<id8>";
+      # don't stack another suffix on each trip.
+      base="$(basename "$root")"; base="${base%%-"$short"*}"
+      wt="$REPOS_DIR/.teleport/$base-$short"
+      mkdir -p "$wt"
+    fi
   else
     if ! repo="$(teleport_find_repo "$remote")"; then
       repo="$REPOS_DIR/$(basename "${remote%.git}")"
@@ -683,10 +724,15 @@ teleport_land() {
     [ -f "$x/repo.bundle" ] \
       && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
 
-    wt="$REPOS_DIR/.teleport/$(basename "$repo")-$short"
+    # A separate worktree, but inside the checkout that hosts the repo here
+    # (where Claude Code keeps its own), hidden from that checkout's status.
+    host="$(cd -P "$repo" && pwd)"
+    wt="$host/.claude/worktrees/teleport-$short"
+    teleport_exclude_worktrees "$host"
     # Teleported again: the new copy gets its own worktree (the old one may
     # hold work), and supersedes the old session in teleport_start.
     [ ! -e "$wt" ] || wt="$wt-$(date +%Y%m%d%H%M%S)"
+    mkdir -p "$(dirname "$wt")"
     # Take the branch name only if this machine has no branch by that name —
     # never move or check out someone's existing local branch.
     if [ -n "$branch" ] && ! git -C "$repo" show-ref --verify -q "refs/heads/$branch"; then
@@ -713,6 +759,16 @@ teleport_land() {
     env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$acct" "$SCRIPT_DIR/brain" teleport _start "$x" "$wt" "$cwd"
   fi
   rm -rf "$x"
+}
+
+# Keep worktrees made inside checkout $1 out of its `git status`.
+teleport_exclude_worktrees() {
+  local ex
+  git -C "$1" check-ignore -q .claude/worktrees/x 2>/dev/null && return 0
+  ex="$(git -C "$1" rev-parse --git-common-dir)"
+  case "$ex" in /*) ;; *) ex="$1/$ex" ;; esac
+  mkdir -p "$ex/info"
+  printf '%s\n' '/.claude/worktrees/' >> "$ex/info/exclude"
 }
 
 # Print the account set to land manifest $1 in. $2 is the repo's name here
