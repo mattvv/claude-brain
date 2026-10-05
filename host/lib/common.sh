@@ -49,7 +49,9 @@ BRAIN_ACCOUNT_BASE_PORT=8318
 # Account names become paths, unit names and tmux names: keep them boring.
 account_name_ok() {
   case "$1" in
-    ''|-*|*[!a-z0-9-]*) return 1 ;;
+    # Spelled out: bash 3.2 (macOS) collates [a-z] by locale, so it admits
+    # uppercase, and on a case-insensitive disk "Work" would clobber "work".
+    ''|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
   esac
   [ "${#1}" -le 32 ]
 }
