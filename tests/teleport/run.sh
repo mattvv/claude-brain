@@ -266,6 +266,11 @@ check "opens with a recap turn" \
 
 : > "$LOG"
 HOME="$DI" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGI" >/dev/null 2>&1
+check "the target set skips first-run setup (seen stuck at the theme picker)" \
+  'jq -e ".hasCompletedOnboarding == true and .theme != null" "$DI/.claude-work/.claude.json" >/dev/null'
+check "its own settings survive" 'jq -e ".oauthAccount.accountUuid == \"U-WORK\"" "$DI/.claude-work/.claude.json" >/dev/null'
+check "alive but no link is reported stuck, not landed" \
+  'grep -q "never reached claude.ai" "$DI/.local/state/brain/teleport/log" && ! grep -q "landed $IID" "$DI/.local/state/brain/teleport/log"'
 check "teleporting the same session again replaces the old copy" \
   'grep -q "tmux kill-session -t =brain-teleport-12121212" "$LOG" && grep -q "new-session" "$LOG" && [ "$(ls -d "$DI"/repos/.teleport/proj-12121212* | wc -l | tr -d " ")" = 2 ]'
 
@@ -304,7 +309,7 @@ check "a stale receipt is ignored and the matching one ends the original" \
 P2="$(sleeper)"
 echo '{"id":"'"$ID"'","host":"new","nonce":"N2","status":"failed"}' > "$AK/brain-teleport-ack-$ID.json"
 HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await "$ID" "$P2" N2 >/dev/null 2>&1
-check "a failed landing keeps the original" 'kill -0 "$P2" 2>/dev/null && grep -q "did not start on new" "$DA/.local/state/brain/teleport/log"'
+check "a failed landing keeps the original" 'kill -0 "$P2" 2>/dev/null && grep -q "did not come up on new (failed)" "$DA/.local/state/brain/teleport/log"'
 kill "$P2" 2>/dev/null
 check "receipts are consumed" '[ -z "$(ls "$AK")" ]'
 check "the package carries the send's token" 'tar xzf "$PKG" -O ./manifest.json | jq -e "has(\"nonce\")" >/dev/null'
@@ -314,6 +319,8 @@ DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
 git clone -q "$ORIGIN" "$DST3/repos/proj" 2>/dev/null
 cp "$OUT2/brain-teleport-$ID.tgz" "$DST3/inbox-src/"
 echo hi > "$DST3/inbox-src/holiday.jpg"
+mkdir -p "$DST3/.claude/sessions"
+printf '{"pid":9,"sessionId":"%s","bridgeSessionId":"session_01RECV"}\n' "$ID" > "$DST3/.claude/sessions/9.json"
 HOME="$DST3" FAKE_INBOX="$DST3/inbox-src" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
 check "package landed and archived" \
   '[ -d "$DST3/repos/.teleport/proj-11111111" ] && [ -f "$DST3/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ]'
