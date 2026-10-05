@@ -414,6 +414,8 @@ rc_watch_one() {
     tmux respawn-pane -k -t "$pane"  # reruns the original launch command
   elif [ "$name" = brain-rc ]; then
     "$0" rc </dev/null
+  elif [ "${name#brain-acct-}" != "$name" ]; then
+    env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="${name#brain-acct-}" "$0" rc </dev/null
   else
     "$0" repo serve "${name#brain-rc-}" </dev/null
   fi
@@ -448,6 +450,11 @@ cmd_watchdog() {
 #           worktree, put the conversation where `claude --resume` looks for
 #           that directory, and start it with Remote Control so it shows up
 #           on claude.ai under the target machine.
+#   account the session stays in its account set: it lands in the set the
+#           repo is pinned to on the target, else the set it came from. A set
+#           the target doesn't have fails closed (package kept in failed/,
+#           `brain teleport retry` after `brain account add`) — a work
+#           conversation never quietly runs on a personal login.
 #   confirm the target Taildrops back a receipt with the new session's link;
 #           only then does the original session end. No receipt within ten
 #           minutes and the original is left running.
@@ -513,11 +520,31 @@ teleport_self() {
     | jq -r '(.Self.DNSName // "" | split(".")[0]) as $d | if $d != "" then $d else (.Self.HostName // empty) end'
 }
 
+# The transcript of session $1, looked for in this set's Claude dir first,
+# then every other set's (a terminal in the default set can teleport a work
+# session by id).
+teleport_find_transcript() {
+  local d t
+  for d in "$BRAIN_CLAUDE_DIR" "$HOME/.claude" "$HOME"/.claude-*; do
+    [ -d "$d/projects" ] || continue
+    t="$(find "$d/projects" -maxdepth 2 -name "$1.jsonl" -print -quit 2>/dev/null)"
+    [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  done
+  return 1
+}
+
 # teleport_pack SESSION_ID OUTDIR — writes OUTDIR/brain-teleport-<id>.tgz.
 teleport_pack() {
-  local id="$1" out="$2" transcript cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
-  transcript="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$id.jsonl" -print -quit 2>/dev/null)"
-  [ -n "$transcript" ] || die "no transcript for session $id under ~/.claude/projects"
+  local id="$1" out="$2" transcript cdir acct cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
+  transcript="$(teleport_find_transcript "$id")" \
+    || die "no transcript for session $id in any account set's Claude dir"
+  # Which set it belongs to follows from where it lives: ~/.claude-<set>/.
+  cdir="${transcript%/projects/*}"
+  case "$cdir" in
+    "$HOME/.claude") acct=default ;;
+    "$HOME"/.claude-*) acct="${cdir#"$HOME"/.claude-}" ;;
+    *) acct="$BRAIN_ACCOUNT" ;;
+  esac
   # The directory the session was started in — `claude --resume` looks the
   # conversation up by it.
   cwd="$(jq -rn 'first(inputs | select(.cwd != null) | .cwd)' "$transcript")"
@@ -558,12 +585,12 @@ teleport_pack() {
 
   cp "$transcript" "$work/pkg/transcript.jsonl"
   [ -d "${transcript%.jsonl}" ] && cp -R "${transcript%.jsonl}" "$work/pkg/session-dir"
-  name="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .name // empty' "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1 || true)"
+  name="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .name // empty' "$cdir"/sessions/*.json 2>/dev/null | head -1 || true)"
   jq -n --arg id "$id" --arg from "$(teleport_self)" --arg remote "$remote" \
     --arg head "$head" --arg wip "$wip" --arg branch "$branch" --arg root "$root" \
-    --arg rel "$rel" --arg name "${name:-$(basename "$root")}" \
+    --arg rel "$rel" --arg name "${name:-$(basename "$root")}" --arg account "$acct" \
     '{v: 1, id: $id, from: $from, remote: $remote, head: $head, wip: $wip,
-      branch: $branch, root: $root, rel: $rel, name: $name}' > "$work/pkg/manifest.json"
+      branch: $branch, root: $root, rel: $rel, name: $name, account: $account}' > "$work/pkg/manifest.json"
   tar czf "$out/brain-teleport-$id.tgz" -C "$work/pkg" .
   rm -rf "$work"
 }
@@ -583,18 +610,20 @@ teleport_find_repo() {
 # teleport_land PKG — rebuild the session described by PKG and start it.
 # Prints the new claude.ai link (empty if it did not show up in time).
 teleport_land() {
-  local pkg="$1" x m id remote head wip branch root rel sname repo short wt cwd slug from i bridge url=""
+  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct pin
   x="$(mktemp -d)"
   tar xzf "$pkg" -C "$x"
   m="$x/manifest.json"
   id="$(jq -r .id "$m")"; remote="$(jq -r .remote "$m")"; head="$(jq -r .head "$m")"
   wip="$(jq -r .wip "$m")"; branch="$(jq -r .branch "$m")"; root="$(jq -r .root "$m")"
-  rel="$(jq -r .rel "$m")"; sname="$(jq -r .name "$m")"; from="$(jq -r .from "$m")"
+  rel="$(jq -r .rel "$m")"; acct="$(jq -r '.account // "default"' "$m")"
   case "$id" in *[!A-Za-z0-9-]*|"") die "bad session id in $pkg" ;; esac
+  account_name_ok "$acct" || die "bad account set name in $pkg: $acct"
   short="${id:0:8}"
   mkdir -p "$REPOS_DIR/.teleport"
 
   if [ -z "$remote" ]; then
+    teleport_need_account "$acct" "$id"
     wt="$REPOS_DIR/.teleport/$(basename "$root")-$short"
     mkdir -p "$wt"
   else
@@ -608,6 +637,14 @@ teleport_land() {
         git clone -q "$remote" "$repo"
       fi
     fi
+    # A repo pinned to a set here runs under that set, whoever sent it.
+    pin="$(basename "$repo")"
+    if repo_account_pinned "$pin"; then
+      pin="$(repo_account_get "$pin")"
+      [ "$pin" = "$acct" ] || teleport_log "$id: $(basename "$repo") is pinned to account set $pin here — landing it there, not in $acct"
+      acct="$pin"
+    fi
+    teleport_need_account "$acct" "$id"
     git -C "$repo" fetch -q origin || true  # the bundle's prerequisites
     [ -f "$x/repo.bundle" ] \
       && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
@@ -631,33 +668,59 @@ teleport_land() {
   wt="$(cd -P "$wt" && pwd)"
   cwd="$wt$rel"
   mkdir -p "$cwd"
+  # Paths (Claude dir, .claude.json, logins) resolve once per process, so the
+  # rest runs as that set.
+  if [ "$acct" = "$BRAIN_ACCOUNT" ]; then
+    teleport_start "$x" "$wt" "$cwd"
+  else
+    env -u BRAIN_ACCOUNT_FLAG BRAIN_ACCOUNT="$acct" "$SCRIPT_DIR/brain" teleport _start "$x" "$wt" "$cwd"
+  fi
+  rm -rf "$x"
+}
+
+# Refuse a set this machine doesn't have, rather than fall back to another
+# set's Claude login.
+teleport_need_account() {
+  account_exists "$1" && return 0
+  teleport_log "$2 belongs to account set '$1', which this machine doesn't have — create it (brain account add $1), then: brain teleport retry"
+  die "no account set '$1' here — create it with: brain account add $1, then: brain teleport retry"
+}
+
+# teleport_start UNPACKED WORKTREE CWD — the account-set-specific half of a
+# landing, run as the target set: file the conversation in this set's Claude
+# dir, trust the directory, start it with this set's login, send the receipt.
+teleport_start() {
+  local x="$1" wt="$2" cwd="$3" m id root sname from short slug i bridge url="" inner
+  m="$x/manifest.json"
+  id="$(jq -r .id "$m")"; root="$(jq -r .root "$m")"; sname="$(jq -r .name "$m")"; from="$(jq -r .from "$m")"
+  short="${id:0:8}"
   # Same conversation, new home: Claude finds it by the directory's slug.
   slug="$(printf '%s' "$cwd" | sed 's|[^A-Za-z0-9]|-|g')"
-  mkdir -p "$HOME/.claude/projects/$slug"
+  mkdir -p "$BRAIN_CLAUDE_DIR/projects/$slug"
   jq -c --arg o "$root" --arg n "$wt" \
     'if (.cwd | type) == "string" and (.cwd | startswith($o)) then .cwd = $n + (.cwd | ltrimstr($o)) else . end' \
-    "$x/transcript.jsonl" > "$HOME/.claude/projects/$slug/$id.jsonl"
-  [ -d "$x/session-dir" ] && cp -R "$x/session-dir" "$HOME/.claude/projects/$slug/$id"
+    "$x/transcript.jsonl" > "$BRAIN_CLAUDE_DIR/projects/$slug/$id.jsonl"
+  [ -d "$x/session-dir" ] && cp -R "$x/session-dir" "$BRAIN_CLAUDE_DIR/projects/$slug/$id"
   seed_trust "$cwd"
 
+  inner="$(claude_bin) --resume $(printf %q "$id") --remote-control $(printf %q "$sname")"
   tmux new-session -d -s "brain-teleport-$short" \
-    "cd '$cwd' && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
-     $(claude_bin) --resume '$id' --remote-control '$sname'"
+    "cd $(printf %q "$cwd") && exec $(claude_account_env) bash -c $(printf %q "$inner")"
   for i in $(seq "$TELEPORT_WAIT"); do
     bridge="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .bridgeSessionId // empty' \
-      "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1 || true)"
+      "$BRAIN_CLAUDE_DIR"/sessions/*.json 2>/dev/null | head -1 || true)"
     [ -n "$bridge" ] && { url="https://claude.ai/code/$bridge"; break; }
     sleep 1
   done
-  teleport_log "landed $id from ${from:-?} in $cwd${url:+ — $url}"
+  teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT)${url:+ — $url}"
 
   if [ -n "$from" ] && command -v tailscale >/dev/null 2>&1; then
     jq -n --arg id "$id" --arg host "$(teleport_self)" --arg url "$url" --arg dir "$cwd" \
-      '{id: $id, host: $host, url: $url, dir: $dir}' > "$x/brain-teleport-ack-$id.json"
+      --arg account "$BRAIN_ACCOUNT" \
+      '{id: $id, host: $host, url: $url, dir: $dir, account: $account}' > "$x/brain-teleport-ack-$id.json"
     tailscale file cp "$x/brain-teleport-ack-$id.json" "$from:" >/dev/null 2>&1 \
       || teleport_log "could not send the receipt for $id back to $from"
   fi
-  rm -rf "$x"
   printf '%s\n' "$url"
 }
 
@@ -708,6 +771,16 @@ cmd_teleport() {
       die "usage: brain teleport <machine> [session-id]   (machines: tailscale file cp --targets)" ;;
     _pack)  teleport_pack "$2" "$3"; return ;;
     _land)  teleport_land "$2"; return ;;
+    _start) teleport_start "$2" "$3" "$4"; return ;;
+    retry)
+      local f n=0
+      mkdir -p "$TELEPORT_DIR/inbox"
+      for f in "$TELEPORT_DIR/failed"/*.tgz; do
+        [ -f "$f" ] || continue
+        mv "$f" "$TELEPORT_DIR/inbox/"; n=$((n+1))
+      done
+      ok "$n package(s) queued again — the watchdog lands them within a minute"
+      return ;;
     _await) teleport_await "$2" "$3"; return ;;
     log)    tail -n 20 "$TELEPORT_DIR/log" 2>/dev/null || info "nothing teleported yet"; return ;;
   esac
