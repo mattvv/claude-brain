@@ -401,39 +401,46 @@ teleport_self() { tailscale status --json 2>/dev/null | jq -r '.Self.HostName //
 
 # teleport_pack SESSION_ID OUTDIR — writes OUTDIR/brain-teleport-<id>.tgz.
 teleport_pack() {
-  local id="$1" out="$2" transcript cwd root rel remote head branch tree wip="" tip ref work name
+  local id="$1" out="$2" transcript cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
   transcript="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$id.jsonl" 2>/dev/null | head -1)"
   [ -n "$transcript" ] || die "no transcript for session $id under ~/.claude/projects"
   # The directory the session was started in — `claude --resume` looks the
   # conversation up by it.
   cwd="$(jq -r 'select(.cwd != null) | .cwd' "$transcript" | head -1)"
   [ -d "$cwd" ] || die "the session's directory is gone: $cwd"
-  root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "$cwd is not in a git repo — teleport carries the code with the session"
-  root="$(cd -P "$root" && pwd)"; cwd="$(cd -P "$cwd" && pwd)"
-  rel="${cwd#"$root"}"
-  remote="$(git -C "$root" remote get-url origin 2>/dev/null)" \
-    || die "$root has no origin remote for the other machine to clone"
-  head="$(git -C "$root" rev-parse HEAD)"
-  branch="$(git -C "$root" symbolic-ref --short -q HEAD || true)"
-
+  cwd="$(cd -P "$cwd" && pwd)"
   work="$(mktemp -d)"
   mkdir -p "$work/pkg"
-  GIT_INDEX_FILE="$work/index" git -C "$root" read-tree HEAD
-  GIT_INDEX_FILE="$work/index" git -C "$root" add -A
-  tree="$(GIT_INDEX_FILE="$work/index" git -C "$root" write-tree)"
-  if [ "$tree" != "$(git -C "$root" rev-parse 'HEAD^{tree}')" ]; then
-    wip="$(git -C "$root" commit-tree "$tree" -p HEAD -m "brain teleport: uncommitted changes")"
+
+  # Outside a git repo there is no code to carry: the conversation alone
+  # goes, and lands in an empty directory on the other side.
+  if ! root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+    root="$cwd"
+    warn "$cwd is not a git repo — teleporting the conversation only, not its files"
+  else
+    root="$(cd -P "$root" && pwd)"
+    rel="${cwd#"$root"}"
+    remote="$(git -C "$root" remote get-url origin 2>/dev/null)" \
+      || die "$root has no origin remote for the other machine to clone"
+    head="$(git -C "$root" rev-parse HEAD)"
+    branch="$(git -C "$root" symbolic-ref --short -q HEAD || true)"
+
+    GIT_INDEX_FILE="$work/index" git -C "$root" read-tree HEAD
+    GIT_INDEX_FILE="$work/index" git -C "$root" add -A
+    tree="$(GIT_INDEX_FILE="$work/index" git -C "$root" write-tree)"
+    if [ "$tree" != "$(git -C "$root" rev-parse 'HEAD^{tree}')" ]; then
+      wip="$(git -C "$root" commit-tree "$tree" -p HEAD -m "brain teleport: uncommitted changes")"
+    fi
+    tip="${wip:-$head}"
+    ref="refs/brain-teleport/$id"
+    git -C "$root" update-ref "$ref" "$tip"
+    # Only what the remote does not already have; nothing at all when the tree
+    # is clean and pushed (git refuses an empty bundle).
+    if [ "$(git -C "$root" rev-list --count "$tip" --not --remotes)" -gt 0 ]; then
+      git -C "$root" bundle create "$work/pkg/repo.bundle" "$ref" --not --remotes >/dev/null 2>&1
+    fi
+    git -C "$root" update-ref -d "$ref"
   fi
-  tip="${wip:-$head}"
-  ref="refs/brain-teleport/$id"
-  git -C "$root" update-ref "$ref" "$tip"
-  # Only what the remote does not already have; nothing at all when the tree
-  # is clean and pushed (git refuses an empty bundle).
-  if [ "$(git -C "$root" rev-list --count "$tip" --not --remotes)" -gt 0 ]; then
-    git -C "$root" bundle create "$work/pkg/repo.bundle" "$ref" --not --remotes >/dev/null 2>&1
-  fi
-  git -C "$root" update-ref -d "$ref"
 
   cp "$transcript" "$work/pkg/transcript.jsonl"
   [ -d "${transcript%.jsonl}" ] && cp -R "${transcript%.jsonl}" "$work/pkg/session-dir"
@@ -470,37 +477,42 @@ teleport_land() {
   wip="$(jq -r .wip "$m")"; branch="$(jq -r .branch "$m")"; root="$(jq -r .root "$m")"
   rel="$(jq -r .rel "$m")"; sname="$(jq -r .name "$m")"; from="$(jq -r .from "$m")"
   case "$id" in *[!A-Za-z0-9-]*|"") die "bad session id in $pkg" ;; esac
-
-  if ! repo="$(teleport_find_repo "$remote")"; then
-    repo="$REPOS_DIR/$(basename "${remote%.git}")"
-    [ ! -e "$repo" ] || die "$repo exists but is not a clone of $remote"
-    mkdir -p "$REPOS_DIR"
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-      gh repo clone "$remote" "$repo" -- -q >/dev/null 2>&1
-    else
-      git clone -q "$remote" "$repo"
-    fi
-  fi
-  git -C "$repo" fetch -q origin || true  # the bundle's prerequisites
-  [ -f "$x/repo.bundle" ] \
-    && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
-
   short="${id:0:8}"
-  wt="$REPOS_DIR/.teleport/$(basename "$repo")-$short"
   mkdir -p "$REPOS_DIR/.teleport"
-  # Take the branch name only if this machine has no branch by that name —
-  # never move or check out someone's existing local branch.
-  if [ -n "$branch" ] && ! git -C "$repo" show-ref --verify -q "refs/heads/$branch"; then
-    git -C "$repo" worktree add -q -b "$branch" "$wt" "$head"
+
+  if [ -z "$remote" ]; then
+    wt="$REPOS_DIR/.teleport/$(basename "$root")-$short"
+    mkdir -p "$wt"
   else
-    git -C "$repo" worktree add -q --detach "$wt" "$head"
+    if ! repo="$(teleport_find_repo "$remote")"; then
+      repo="$REPOS_DIR/$(basename "${remote%.git}")"
+      [ ! -e "$repo" ] || die "$repo exists but is not a clone of $remote"
+      mkdir -p "$REPOS_DIR"
+      if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        gh repo clone "$remote" "$repo" -- -q >/dev/null 2>&1
+      else
+        git clone -q "$remote" "$repo"
+      fi
+    fi
+    git -C "$repo" fetch -q origin || true  # the bundle's prerequisites
+    [ -f "$x/repo.bundle" ] \
+      && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
+
+    wt="$REPOS_DIR/.teleport/$(basename "$repo")-$short"
+    # Take the branch name only if this machine has no branch by that name —
+    # never move or check out someone's existing local branch.
+    if [ -n "$branch" ] && ! git -C "$repo" show-ref --verify -q "refs/heads/$branch"; then
+      git -C "$repo" worktree add -q -b "$branch" "$wt" "$head"
+    else
+      git -C "$repo" worktree add -q --detach "$wt" "$head"
+    fi
+    # Uncommitted work comes back uncommitted (diff+apply also replays deletions
+    # and leaves new files untracked).
+    if [ -n "$wip" ]; then
+      git -C "$wt" diff --binary "$head" "$wip" | git -C "$wt" apply --binary
+    fi
+    git -C "$repo" update-ref -d "refs/brain-teleport/$id" 2>/dev/null || true
   fi
-  # Uncommitted work comes back uncommitted (diff+apply also replays deletions
-  # and leaves new files untracked).
-  if [ -n "$wip" ]; then
-    git -C "$wt" diff --binary "$head" "$wip" | git -C "$wt" apply --binary
-  fi
-  git -C "$repo" update-ref -d "refs/brain-teleport/$id" 2>/dev/null || true
 
   wt="$(cd -P "$wt" && pwd)"
   cwd="$wt$rel"

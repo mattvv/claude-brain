@@ -128,6 +128,32 @@ private network — no ports ever open to the internet:
 
 Tailscale is also the easiest way to reach a brain at home from a coffee shop.
 
+## Moving a session to another brain (teleport)
+
+Got more than one brain — say a laptop and a Linux box at home? Tell a session
+*"teleport this to mattvv-linux"* (or run `brain teleport <machine>` in it) and it moves,
+mid-conversation, with its code:
+
+- **The conversation** — the whole transcript, so the session remembers everything.
+- **The code, exactly as it is** — branch, unpushed commits, and uncommitted and untracked
+  changes. Your checkout is never touched; the work is rebuilt on the other machine in a
+  fresh git worktree under `~/repos/.teleport/` (cloning the repo there first if needed).
+
+Within about a minute it shows up in the Claude app under the other machine, ready to carry
+on. Once that machine confirms, the original session closes; if no confirmation comes back
+within ten minutes, the original simply stays open. A session started outside a git repo
+moves its conversation only and lands in an empty folder.
+
+It travels over Taildrop, Tailscale's file sharing between your own devices — no ports, no
+SSH. To set up a machine to **receive** sessions (once):
+
+1. Put it on your tailnet and turn on `brain autostart enable` — the every-minute watchdog
+   is what picks up arriving sessions.
+2. On Linux, let brain read Taildrop without sudo: `sudo tailscale set --operator=$USER`.
+
+`tailscale file cp --targets` lists the machines you can send to; `brain teleport log`
+shows what came and went.
+
 ## Everyday use
 
 | Command | What it does |
@@ -135,7 +161,8 @@ Tailscale is also the easiest way to reach a brain at home from a coffee shop.
 | `brain` | Start/attach the phone-control server (spawn as many sessions as you like from the app) |
 | `brain repo add <owner/name>` | Clone one of your GitHub repos and serve phone sessions for it (`repo ls` / `repo serve` / `repo stop`) — or just ask your brain to do it |
 | `brain status` | Health check: host, router, linked accounts, sessions |
-| `brain autostart enable` | Come back automatically after a reboot (`disable` / `status`) |
+| `brain autostart enable` | Come back automatically after a reboot, and restart the server within a minute if it dies (e.g. after a long sleep) — `disable` / `status` |
+| `brain teleport <machine>` | Move this session — conversation, branch and uncommitted work — to the brain on another machine ([details](#moving-a-session-to-another-brain-teleport)) |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
 | `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
@@ -300,6 +327,12 @@ The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.m
 - **The brain vanished after a reboot** → `brain autostart status`. On a Mac, a brain only
   comes back once someone is logged in — turn on auto-login for a dedicated machine.
 - **Your Mac keeps falling asleep** → `brain keepawake` (it shows you what it will change).
+- **Sessions went offline after the laptop slept** → with `brain autostart enable` the
+  server is back within a minute of waking. It brings back its most recent session; start
+  new ones for the rest (their history is still on disk).
+- **A teleported session never showed up** → `brain teleport log` on both machines. The
+  usual causes: the target's watchdog is off (`brain autostart status`), or on Linux
+  Tailscale isn't letting brain read Taildrop (`sudo tailscale set --operator=$USER`).
 
 ## Security notes
 
@@ -307,6 +340,9 @@ The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.m
   on any host. `brain status` fails loudly if that ever stops being true.
 - Nothing about claude-brain opens a port. Dev servers are shared through Tailscale
   (`brain expose`); public Funnel links are explicit and stopped with `brain expose off`.
+- Teleport sends sessions over Taildrop, which only moves files between your own devices.
+  A teleported package holds the conversation and your uncommitted code, so it goes nowhere
+  else; anything arriving by Taildrop that isn't a teleport is moved to `~/Downloads`.
 - Never share the files in `~/.config/brain/` or `~/.cli-proxy-api/`: they hold live login
   tokens for your accounts. On a personal machine, keep full-disk encryption on.
 - On your own computer, claude-brain backs up your Claude Code settings before touching

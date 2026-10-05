@@ -131,6 +131,24 @@ eq "lands at the pushed commit" "$UNPUSHED" "$(git -C "$WT2" rev-parse HEAD)"
 check "an existing local branch is never moved" \
   '[ "$(git -C "$DST2/repos/proj" rev-parse feature)" = "$(git -C "$DST2/repos/proj" rev-parse origin/main)" ] && ! git -C "$WT2" symbolic-ref -q HEAD >/dev/null'
 
+echo "== outside a git repo: conversation only =="
+NID=99999999-8888-7777-6666-555555555555
+LOOSE="$SRC/notes"; mkdir -p "$LOOSE"
+LSLUG="$(printf '%s' "$LOOSE" | sed 's|[^A-Za-z0-9]|-|g')"
+mkdir -p "$SRC/.claude/projects/$LSLUG"
+printf '{"type":"user","cwd":"%s","message":"remember mango"}\n' "$LOOSE" > "$SRC/.claude/projects/$LSLUG/$NID.jsonl"
+OUT3="$TMP/out3"; mkdir -p "$OUT3"
+WARN="$(HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$NID" "$OUT3" 2>&1 >/dev/null)"
+check "packs anyway, and says the files stay behind" \
+  '[ -f "$OUT3/brain-teleport-$NID.tgz" ] && printf %s "$WARN" | grep -q "conversation only"'
+DST4="$TMP/dst4"; : > "$LOG"
+HOME="$DST4" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$OUT3/brain-teleport-$NID.tgz" >/dev/null
+LWT="$(cd -P "$DST4/repos/.teleport/notes-99999999" 2>/dev/null && pwd)"
+check "lands in an empty directory" '[ -n "$LWT" ] && [ -z "$(ls -A "$LWT")" ]'
+LNSLUG="$(printf '%s' "$LWT" | sed 's|[^A-Za-z0-9]|-|g')"
+eq "conversation cwd rewritten" "$LWT" "$(jq -r .cwd "$DST4/.claude/projects/$LNSLUG/$NID.jsonl")"
+check "resumed there" 'grep -q -- "--resume .$NID." "$LOG"'
+
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
 git clone -q "$ORIGIN" "$DST3/repos/proj" 2>/dev/null
