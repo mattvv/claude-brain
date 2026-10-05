@@ -109,7 +109,9 @@ eq "subdirectory cwd rewritten" "$NEWCWD/deeper" "$(jq -r 'select(.cwd) | .cwd' 
 eq "unrelated cwd left alone" /elsewhere "$(jq -r 'select(.cwd) | .cwd' "$T" | sed -n 3p)"
 check "subagent transcripts filed too" '[ -f "$DST/.claude/projects/$NEWSLUG/$ID/subagents/a.jsonl" ]'
 check "resumed with Remote Control in its own tmux session" \
-  'grep -q "tmux new-session -d -s brain-teleport-11111111" "$LOG" && grep -q -- "--resume .$ID. --remote-control .core-pineapple." "$LOG"'
+  'grep -q "tmux new-session -d -s brain-teleport-11111111" "$LOG" && grep -qF -- "--resume\\ $ID\\ --remote-control\\ core-pineapple" "$LOG"'
+check "default set: launched without another set's config dir" 'grep -q -- "-u CLAUDE_CONFIG_DIR BRAIN_ACCOUNT=default" "$LOG"'
+eq "manifest names the account set" default "$(jq -r .account "$TMP/peek/manifest.json")"
 check "directory pre-trusted" 'jq -e --arg d "$NEWCWD" ".projects[\$d].hasTrustDialogAccepted" "$DST/.claude.json" >/dev/null'
 eq "prints the new link" "https://claude.ai/code/session_01LANDED" "$URL"
 check "receipt sent back to the sender" 'grep -q "tailscale file cp .*brain-teleport-ack-$ID.json src-host:" "$LOG"'
@@ -147,7 +149,7 @@ LWT="$(cd -P "$DST4/repos/.teleport/notes-99999999" 2>/dev/null && pwd)"
 check "lands in an empty directory" '[ -n "$LWT" ] && [ -z "$(ls -A "$LWT")" ]'
 LNSLUG="$(printf '%s' "$LWT" | sed 's|[^A-Za-z0-9]|-|g')"
 eq "conversation cwd rewritten" "$LWT" "$(jq -r .cwd "$DST4/.claude/projects/$LNSLUG/$NID.jsonl")"
-check "resumed there" 'grep -q -- "--resume .$NID." "$LOG"'
+check "resumed there" 'grep -qF -- "--resume\\ $NID" "$LOG"'
 
 echo "== a long conversation =="
 # Regression: `jq ... | head -1` died of SIGPIPE under pipefail on real-sized
@@ -161,6 +163,66 @@ BID=77777777-6666-5555-4444-333333333333
 OUT4="$TMP/out4"; mkdir -p "$OUT4"
 HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$BID" "$OUT4" >/dev/null 2>&1
 check "packs a 20k-line conversation" '[ -f "$OUT4/brain-teleport-$BID.tgz" ]'
+
+echo "== account sets =="
+# A session in the "work" set lives in ~/.claude-work and must land there,
+# under the work login — never in another set's.
+WID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+mkdir -p "$SRC/.claude-work/projects/$SLUG" "$SRC/.claude-work/sessions"
+printf '{"type":"user","cwd":"%s","message":"work stuff"}\n' "$WORK/app" > "$SRC/.claude-work/projects/$SLUG/$WID.jsonl"
+printf '{"pid":3,"sessionId":"%s","name":"work-session"}\n' "$WID" > "$SRC/.claude-work/sessions/3.json"
+OUTW="$TMP/outw"; mkdir -p "$OUTW"
+# run from the default set (a plain terminal), by id
+HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$WID" "$OUTW" >/dev/null 2>&1
+PKGW="$OUTW/brain-teleport-$WID.tgz"
+eq "a work session is packed as work" work "$(tar xzf "$PKGW" -O ./manifest.json | jq -r .account)"
+eq "and named from the work set's records" work-session "$(tar xzf "$PKGW" -O ./manifest.json | jq -r .name)"
+
+DW="$TMP/dstw"; git clone -q "$ORIGIN" "$DW/repos/proj" 2>/dev/null
+: > "$LOG"
+check "refused where there is no work set" \
+  '! HOME="$DW" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGW" >/dev/null 2>&1'
+check "nothing built or started when refused" \
+  '[ ! -e "$DW/repos/.teleport/proj-aaaaaaaa" ] && ! grep -q new-session "$LOG"'
+check "nothing filed in the default set" '[ -z "$(ls "$DW/.claude/projects" 2>/dev/null)" ]'
+
+mkdir -p "$DW/.config/brain/accounts/work" "$DW/.claude-work/sessions"
+echo PORT=8318 > "$DW/.config/brain/accounts/work/account"
+printf '{"pid":4,"sessionId":"%s","bridgeSessionId":"session_01WORK"}\n' "$WID" > "$DW/.claude-work/sessions/4.json"
+URLW="$(HOME="$DW" BRAIN_TELEPORT_WAIT=2 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGW")"
+WWT="$(cd -P "$DW/repos/.teleport/proj-aaaaaaaa/app" && pwd)"
+WSLUG="$(printf '%s' "$WWT" | sed 's|[^A-Za-z0-9]|-|g')"
+check "filed in the work set's Claude dir" '[ -f "$DW/.claude-work/projects/$WSLUG/$WID.jsonl" ]'
+check "not in the default set's" '[ ! -e "$DW/.claude/projects/$WSLUG" ]'
+check "trusted in the work set's .claude.json" \
+  'jq -e --arg d "$WWT" ".projects[\$d].hasTrustDialogAccepted" "$DW/.claude-work/.claude.json" >/dev/null && [ ! -e "$DW/.claude.json" ]'
+check "started with the work login" \
+  'grep -q "BRAIN_ACCOUNT=work CLAUDE_CONFIG_DIR=$DW/.claude-work" "$LOG" && grep -q "BRAIN_PROXY_URL=http://127.0.0.1:8318" "$LOG"'
+eq "link read from the work set's sessions" "https://claude.ai/code/session_01WORK" "$URLW"
+check "receipt names the set" 'grep -q "landed $WID .*(account set work)" "$DW/.local/state/brain/teleport/log"'
+
+# The target pins this repo to its "home" set: the pin wins over the sender's.
+DP="$TMP/dstp"; git clone -q "$ORIGIN" "$DP/repos/proj" 2>/dev/null
+mkdir -p "$DP/.config/brain/accounts/work" "$DP/.config/brain/accounts/home"
+echo PORT=8318 > "$DP/.config/brain/accounts/work/account"; echo PORT=8319 > "$DP/.config/brain/accounts/home/account"
+echo proj=home > "$DP/.config/brain/repo-accounts"
+: > "$LOG"
+HOME="$DP" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGW" >/dev/null 2>&1
+check "a repo pinned on the target lands in its pinned set" \
+  'grep -q "BRAIN_ACCOUNT=home CLAUDE_CONFIG_DIR=$DP/.claude-home" "$LOG" && [ -n "$(ls "$DP/.claude-home/projects")" ]'
+check "and the override is logged" 'grep -q "pinned to account set home here" "$DP/.local/state/brain/teleport/log"'
+
+echo "== retry after creating the set =="
+DR="$TMP/dstr"; mkdir -p "$DR/inbox-src"; git clone -q "$ORIGIN" "$DR/repos/proj" 2>/dev/null
+cp "$PKGW" "$DR/inbox-src/"
+HOME="$DR" FAKE_INBOX="$DR/inbox-src" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
+check "missing set: package kept in failed/" '[ -f "$DR/.local/state/brain/teleport/failed/brain-teleport-$WID.tgz" ]'
+check "and the log says how to fix it" 'grep -q "brain account add work" "$DR/.local/state/brain/teleport/log"'
+mkdir -p "$DR/.config/brain/accounts/work"; echo PORT=8318 > "$DR/.config/brain/accounts/work/account"
+HOME="$DR" "${BASH:-bash}" "$BRAIN" teleport retry >/dev/null 2>&1
+HOME="$DR" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
+check "retry lands it in the new set" \
+  '[ -f "$DR/.local/state/brain/teleport/done/brain-teleport-$WID.tgz" ] && [ -n "$(ls "$DR/.claude-work/projects")" ]'
 
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
