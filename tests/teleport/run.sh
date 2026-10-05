@@ -289,6 +289,26 @@ HOME="$DR" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>
 check "retry lands it in the new set" \
   '[ -f "$DR/.local/state/brain/teleport/done/brain-teleport-$WID.tgz" ] && [ -n "$(ls "$DR/.claude-work/projects")" ]'
 
+echo "== receipts: only this send's, and only a running session =="
+# Seen live: a re-teleport found the previous teleport's receipt and ended the
+# original before the new copy had even landed.
+DA="$TMP/dsta"; mkdir -p "$DA/.local/state/brain/teleport/acks"
+AK="$DA/.local/state/brain/teleport/acks"
+sleeper() { sleep 300 >/dev/null 2>&1 & echo $!; }
+P1="$(sleeper)"
+echo '{"id":"'"$ID"'","host":"old","nonce":"OLD","status":"ok"}' > "$AK/brain-teleport-ack-$ID.json"
+echo '{"id":"'"$ID"'","host":"new","nonce":"N1","status":"ok"}' > "$AK/brain-teleport-ack-$ID (1).json"
+HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await "$ID" "$P1" N1 >/dev/null 2>&1
+check "a stale receipt is ignored and the matching one ends the original" \
+  '! kill -0 "$P1" 2>/dev/null && grep -q "confirmed on new" "$DA/.local/state/brain/teleport/log" && ! grep -q "confirmed on old" "$DA/.local/state/brain/teleport/log"'
+P2="$(sleeper)"
+echo '{"id":"'"$ID"'","host":"new","nonce":"N2","status":"failed"}' > "$AK/brain-teleport-ack-$ID.json"
+HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await "$ID" "$P2" N2 >/dev/null 2>&1
+check "a failed landing keeps the original" 'kill -0 "$P2" 2>/dev/null && grep -q "did not start on new" "$DA/.local/state/brain/teleport/log"'
+kill "$P2" 2>/dev/null
+check "receipts are consumed" '[ -z "$(ls "$AK")" ]'
+check "the package carries the send's token" 'tar xzf "$PKG" -O ./manifest.json | jq -e "has(\"nonce\")" >/dev/null'
+
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
 git clone -q "$ORIGIN" "$DST3/repos/proj" 2>/dev/null
