@@ -25,7 +25,7 @@ STUB="$TMP/stub"; mkdir -p "$STUB"
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUB/$1"; chmod 755 "$STUB/$1"; }
 LOG="$TMP/calls.log"
 stub tailscale 'case "$1 $2" in
-  "status --json") printf "{\"Self\":{\"HostName\":\"%s\"}}\n" "${FAKE_HOST:-host}" ;;
+  "status --json") printf "{\"Self\":{\"HostName\":\"Display-Name\",\"DNSName\":\"%s.tailnet.ts.net.\"}}\n" "${FAKE_HOST:-host}" ;;
   "file cp") echo "tailscale $*" >> "'"$LOG"'" ;;
   "file get") shift 2; for a in "$@"; do d="$a"; done
               [ -d "${FAKE_INBOX:-/nonexistent}" ] && mv "$FAKE_INBOX"/* "$d"/ 2>/dev/null; exit 0 ;;
@@ -148,6 +148,19 @@ check "lands in an empty directory" '[ -n "$LWT" ] && [ -z "$(ls -A "$LWT")" ]'
 LNSLUG="$(printf '%s' "$LWT" | sed 's|[^A-Za-z0-9]|-|g')"
 eq "conversation cwd rewritten" "$LWT" "$(jq -r .cwd "$DST4/.claude/projects/$LNSLUG/$NID.jsonl")"
 check "resumed there" 'grep -q -- "--resume .$NID." "$LOG"'
+
+echo "== a long conversation =="
+# Regression: `jq ... | head -1` died of SIGPIPE under pipefail on real-sized
+# transcripts and the pack exited silently.
+BID=77777777-6666-5555-4444-333333333333
+{ printf '{"type":"user","cwd":"%s","message":"start"}\n' "$LOOSE"
+  i=0; while [ $i -lt 20000 ]; do
+    printf '{"type":"assistant","cwd":"%s","message":"%s"}\n' "$LOOSE" "padding padding padding padding padding $i"
+    i=$((i+1)); done
+} > "$SRC/.claude/projects/$LSLUG/$BID.jsonl"
+OUT4="$TMP/out4"; mkdir -p "$OUT4"
+HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$BID" "$OUT4" >/dev/null 2>&1
+check "packs a 20k-line conversation" '[ -f "$OUT4/brain-teleport-$BID.tgz" ]'
 
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
