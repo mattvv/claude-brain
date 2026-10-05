@@ -450,11 +450,14 @@ cmd_watchdog() {
 #           worktree, put the conversation where `claude --resume` looks for
 #           that directory, and start it with Remote Control so it shows up
 #           on claude.ai under the target machine.
-#   account the session stays in its account set: it lands in the set the
-#           repo is pinned to on the target, else the set it came from. A set
-#           the target doesn't have fails closed (package kept in failed/,
-#           `brain teleport retry` after `brain account add`) — a work
-#           conversation never quietly runs on a personal login.
+#   account the session stays on the same Claude account: it lands in the
+#           target's set that is signed in to the same account and org (set
+#           names differ between machines — "default" may be work on one and
+#           personal on another). A repo pin breaks ties. No such set fails
+#           closed (package kept in failed/, `brain teleport retry` once one
+#           is signed in) — a work conversation never runs on another login.
+#   arrive  named after the conversation's title, and its first turn is a
+#           short recap, so the chat on claude.ai isn't blank.
 #   confirm the target Taildrops back a receipt with the new session's link;
 #           only then does the original session end. No receipt within ten
 #           minutes and the original is left running.
@@ -548,7 +551,7 @@ teleport_find_transcript() {
 
 # teleport_pack SESSION_ID OUTDIR — writes OUTDIR/brain-teleport-<id>.tgz.
 teleport_pack() {
-  local id="$1" out="$2" transcript cdir acct cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
+  local id="$1" out="$2" transcript cdir acct title ccfg identity cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
   transcript="$(teleport_find_transcript "$id")" \
     || die "no transcript for session $id in any account set's Claude dir"
   # Which set it belongs to follows from where it lives: ~/.claude-<set>/.
@@ -599,11 +602,20 @@ teleport_pack() {
   cp "$transcript" "$work/pkg/transcript.jsonl"
   [ -d "${transcript%.jsonl}" ] && cp -R "${transcript%.jsonl}" "$work/pkg/session-dir"
   name="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .name // empty' "$cdir"/sessions/*.json 2>/dev/null | head -1 || true)"
+  # The title the user sees: one they set, else Claude's own.
+  title="$(jq -rn '[inputs | select(.type == "custom-title") | .customTitle] | last // empty' "$transcript")"
+  [ -n "$title" ] || title="$(jq -rn '[inputs | select(.type == "ai-title") | .aiTitle] | last // empty' "$transcript")"
+  # Who the session is signed in as (no secrets: ids and the email only).
+  if [ "$cdir" = "$HOME/.claude" ]; then ccfg="$HOME/.claude.json"; else ccfg="$cdir/.claude.json"; fi
+  identity="$(jq -c '.oauthAccount // {} | {account_uuid: (.accountUuid // ""), org_uuid: (.organizationUuid // ""),
+    email: (.emailAddress // ""), org: (.organizationName // "")}' "$ccfg" 2>/dev/null || echo '{}')"
   jq -n --arg id "$id" --arg from "$(teleport_self)" --arg remote "$remote" \
     --arg head "$head" --arg wip "$wip" --arg branch "$branch" --arg root "$root" \
     --arg rel "$rel" --arg name "${name:-$(basename "$root")}" --arg account "$acct" \
+    --arg title "$title" --argjson identity "$identity" \
     '{v: 1, id: $id, from: $from, remote: $remote, head: $head, wip: $wip,
-      branch: $branch, root: $root, rel: $rel, name: $name, account: $account}' > "$work/pkg/manifest.json"
+      branch: $branch, root: $root, rel: $rel, name: $name, account: $account,
+      title: $title, identity: $identity}' > "$work/pkg/manifest.json"
   tar czf "$out/brain-teleport-$id.tgz" -C "$work/pkg" .
   rm -rf "$work"
 }
@@ -623,20 +635,19 @@ teleport_find_repo() {
 # teleport_land PKG — rebuild the session described by PKG and start it.
 # Prints the new claude.ai link (empty if it did not show up in time).
 teleport_land() {
-  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct pin
+  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct
   x="$(mktemp -d)"
   tar xzf "$pkg" -C "$x"
   m="$x/manifest.json"
   id="$(jq -r .id "$m")"; remote="$(jq -r .remote "$m")"; head="$(jq -r .head "$m")"
   wip="$(jq -r .wip "$m")"; branch="$(jq -r .branch "$m")"; root="$(jq -r .root "$m")"
-  rel="$(jq -r .rel "$m")"; acct="$(jq -r '.account // "default"' "$m")"
+  rel="$(jq -r .rel "$m")"
   case "$id" in *[!A-Za-z0-9-]*|"") die "bad session id in $pkg" ;; esac
-  account_name_ok "$acct" || die "bad account set name in $pkg: $acct"
   short="${id:0:8}"
   mkdir -p "$REPOS_DIR/.teleport"
 
   if [ -z "$remote" ]; then
-    teleport_need_account "$acct" "$id"
+    acct="$(teleport_choose_account "$m" "")"
     wt="$REPOS_DIR/.teleport/$(basename "$root")-$short"
     mkdir -p "$wt"
   else
@@ -650,19 +661,15 @@ teleport_land() {
         git clone -q "$remote" "$repo"
       fi
     fi
-    # A repo pinned to a set here runs under that set, whoever sent it.
-    pin="$(basename "$repo")"
-    if repo_account_pinned "$pin"; then
-      pin="$(repo_account_get "$pin")"
-      [ "$pin" = "$acct" ] || teleport_log "$id: $(basename "$repo") is pinned to account set $pin here — landing it there, not in $acct"
-      acct="$pin"
-    fi
-    teleport_need_account "$acct" "$id"
+    acct="$(teleport_choose_account "$m" "$(basename "$repo")")"
     git -C "$repo" fetch -q origin || true  # the bundle's prerequisites
     [ -f "$x/repo.bundle" ] \
       && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
 
     wt="$REPOS_DIR/.teleport/$(basename "$repo")-$short"
+    # Teleported again: the new copy gets its own worktree (the old one may
+    # hold work), and supersedes the old session in teleport_start.
+    [ ! -e "$wt" ] || wt="$wt-$(date +%Y%m%d%H%M%S)"
     # Take the branch name only if this machine has no branch by that name —
     # never move or check out someone's existing local branch.
     if [ -n "$branch" ] && ! git -C "$repo" show-ref --verify -q "refs/heads/$branch"; then
@@ -691,22 +698,68 @@ teleport_land() {
   rm -rf "$x"
 }
 
-# Refuse a set this machine doesn't have, rather than fall back to another
-# set's Claude login.
-teleport_need_account() {
-  account_exists "$1" && return 0
-  teleport_log "$2 belongs to account set '$1', which this machine doesn't have — create it (brain account add $1), then: brain teleport retry"
-  die "no account set '$1' here — create it with: brain account add $1, then: brain teleport retry"
+# Print the account set to land manifest $1 in. $2 is the repo's name here
+# ("" for none), for its pin. Dies — logging how to fix it — when no set fits.
+teleport_choose_account() {
+  local m="$1" rname="$2" id uuid org email acct pin="" a cfg matches="" chosen=""
+  id="$(jq -r .id "$m")"
+  uuid="$(jq -r '.identity.account_uuid // empty' "$m")"
+  org="$(jq -r '.identity.org_uuid // empty' "$m")"
+  email="$(jq -r '.identity.email // empty' "$m")"
+  acct="$(jq -r '.account // "default"' "$m")"
+  account_name_ok "$acct" || acct=default
+  if [ -n "$rname" ] && repo_account_pinned "$rname"; then pin="$(repo_account_get "$rname")"; fi
+
+  if [ -z "$uuid" ]; then
+    # Sent by a brain that didn't record who it was signed in as: go by name.
+    chosen="${pin:-$acct}"
+    [ "$chosen" = "$acct" ] || teleport_log "$id: $rname is pinned to account set $chosen here — landing it there, not in $acct"
+    if ! account_exists "$chosen"; then
+      teleport_log "$id belongs to account set '$chosen', which this machine doesn't have — create it (brain account add $chosen), then: brain teleport retry"
+      die "no account set '$chosen' here — create it with: brain account add $chosen, then: brain teleport retry"
+    fi
+    printf '%s\n' "$chosen"; return 0
+  fi
+
+  for a in $(account_list); do
+    if [ "$a" = default ]; then cfg="$HOME/.claude.json"; else cfg="$HOME/.claude-$a/.claude.json"; fi
+    jq -e --arg u "$uuid" --arg o "$org" \
+      '.oauthAccount.accountUuid == $u and ($o == "" or .oauthAccount.organizationUuid == $o)' \
+      "$cfg" >/dev/null 2>&1 && matches="$matches $a"
+  done
+  if [ -z "$matches" ]; then
+    teleport_log "$id is signed in as ${email:-account $uuid}; no account set here is — sign one in (brain auth anthropic --account <set>), then: brain teleport retry"
+    die "no account set here is signed in as ${email:-account $uuid} — sign one in with: brain auth anthropic --account <set>, then: brain teleport retry"
+  fi
+  # Several sets on the same login: the repo's pin, then the sender's set name.
+  for a in $matches; do [ "$a" = "$pin" ] && chosen="$a"; done
+  [ -n "$chosen" ] || for a in $matches; do [ "$a" = "$acct" ] && chosen="$a"; done
+  [ -n "$chosen" ] || chosen="${matches# }"; chosen="${chosen%% *}"
+  if [ -n "$pin" ] && [ "$pin" != "$chosen" ]; then
+    teleport_log "$id: $rname is pinned to account set $pin here, but that set isn't signed in as ${email:-the sender} — landing in $chosen"
+  fi
+  printf '%s\n' "$chosen"
 }
 
 # teleport_start UNPACKED WORKTREE CWD — the account-set-specific half of a
 # landing, run as the target set: file the conversation in this set's Claude
 # dir, trust the directory, start it with this set's login, send the receipt.
 teleport_start() {
-  local x="$1" wt="$2" cwd="$3" m id root sname from short slug i bridge url="" inner
+  local x="$1" wt="$2" cwd="$3" m id root sname from short slug i bridge url="" inner here where recap
   m="$x/manifest.json"
-  id="$(jq -r .id "$m")"; root="$(jq -r .root "$m")"; sname="$(jq -r .name "$m")"; from="$(jq -r .from "$m")"
+  id="$(jq -r .id "$m")"; root="$(jq -r .root "$m")"; from="$(jq -r .from "$m")"
   short="${id:0:8}"
+  here="$(teleport_self)"
+  sname="$(jq -r 'if (.title // "") != "" then .title else .name end' "$m")${from:+ (from $from)}"
+  if [ -n "$(jq -r .remote "$m")" ]; then
+    where="a fresh git worktree of $(basename "$(jq -r .remote "$m")" .git)"
+    where="$where on $(jq -r 'if .branch != "" then "branch " + .branch else "a detached HEAD" end' "$m")"
+    [ -z "$(jq -r .wip "$m")" ] || where="$where, with the same uncommitted changes"
+  else
+    where="an empty folder (the files in $root stayed on ${from:-the other machine})"
+  fi
+  # The first turn, so the chat on claude.ai opens with where things stand.
+  recap="[brain teleport] This session was just teleported from ${from:-another machine} to ${here:-this machine}. It now runs in $cwd: $where. Before anything else, give the user a short recap (3-5 lines): what this session has been working on, where it left off, and the likely next step. Don't use any tools for this reply."
   # Same conversation, new home: Claude finds it by the directory's slug.
   slug="$(printf '%s' "$cwd" | sed 's|[^A-Za-z0-9]|-|g')"
   mkdir -p "$BRAIN_CLAUDE_DIR/projects/$slug"
@@ -716,7 +769,9 @@ teleport_start() {
   [ -d "$x/session-dir" ] && cp -R "$x/session-dir" "$BRAIN_CLAUDE_DIR/projects/$slug/$id"
   seed_trust "$cwd"
 
-  inner="$(claude_bin) --resume $(printf %q "$id") --remote-control $(printf %q "$sname")"
+  inner="$(claude_bin) --resume $(printf %q "$id") --remote-control $(printf %q "$sname") $(printf %q "$recap")"
+  # A newer teleport of the same conversation replaces the older copy.
+  tmux kill-session -t "=brain-teleport-$short" 2>/dev/null || true
   tmux new-session -d -s "brain-teleport-$short" \
     "cd $(printf %q "$cwd") && exec $(claude_account_env) bash -c $(printf %q "$inner")"
   for i in $(seq "$TELEPORT_WAIT"); do

@@ -151,10 +151,15 @@ SSH. To set up a machine to **receive** sessions (once):
    is what picks up arriving sessions.
 2. On Linux, let brain read Taildrop without sudo: `sudo tailscale set --operator=$USER`.
 
-**Account sets travel too.** A session keeps its [account set](#work-and-personal-accounts): a `work`
-session lands under the target's `work` set, and a repo pinned to a set on the target lands
-in that set. If the target has no such set, the session is refused rather than run on
-another login — create it there (`brain account add work`), then `brain teleport retry`.
+**It stays on the same Claude account.** With [account sets](#work-and-personal-accounts), a
+session lands in whichever set on the other machine is signed in to the same Claude account
+and organization — set names don't have to match (your work login can be `default` on one
+machine and `work` on another). If no set there has that login, the session is refused rather
+than run on another account: sign one in (`brain auth anthropic --account <set>`), then
+`brain teleport retry`.
+
+It arrives named after the conversation's title (plus where it came from), and opens with a
+short recap of what it was doing, so you can pick up straight from your phone.
 
 `tailscale file cp --targets` lists the machines you can send to; `brain teleport log`
 shows what came and went.
