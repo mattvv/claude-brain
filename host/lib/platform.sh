@@ -326,6 +326,7 @@ svc_systemd_unit() {
   case "$1" in
     proxy) printf 'cli-proxy-api\n' ;;
     rc)    printf 'brain-rc\n' ;;
+    watchdog) printf 'brain-watchdog\n' ;;
     *)     printf '%s\n' "$1" ;;
   esac
 }
@@ -356,8 +357,14 @@ svc_install() {
       [ -f "$src" ] || { printf 'missing service unit: %s\n' "$src" >&2; return 1; }
       mkdir -p "$BRAIN_SYSTEMD_DIR"
       cp "$src" "$dst"
+      # A unit with a .timer beside it is started by the timer, not directly.
+      local unit; unit="$(svc_systemd_unit "$name")"
+      if [ -f "${src%.service}.timer" ]; then
+        cp "${src%.service}.timer" "$BRAIN_SYSTEMD_DIR/$unit.timer"
+        unit="$unit.timer"
+      fi
       systemctl --user daemon-reload
-      systemctl --user enable --now "$(svc_systemd_unit "$name")"
+      systemctl --user enable --now "$unit"
       ;;
   esac
 }
@@ -365,7 +372,11 @@ svc_install() {
 svc_is_active() {
   case "$(brain_os)" in
     macos) launchctl print "gui/$(id -u)/$(svc_unit_id "$1")" >/dev/null 2>&1 ;;
-    *)     systemctl --user is-active --quiet "$(svc_systemd_unit "$1")" 2>/dev/null ;;
+    *)
+      # A timer-driven oneshot is idle between runs; its timer is what's "on".
+      systemctl --user is-active --quiet "$(svc_systemd_unit "$1").timer" 2>/dev/null \
+        || systemctl --user is-active --quiet "$(svc_systemd_unit "$1")" 2>/dev/null
+      ;;
   esac
 }
 
@@ -388,8 +399,9 @@ svc_uninstall() {
   case "$(brain_os)" in
     macos) rm -f "$BRAIN_LAUNCHD_DIR/$(svc_unit_id "$1").plist" ;;
     *)
+      systemctl --user disable --now "$(svc_systemd_unit "$1").timer" 2>/dev/null || true
       systemctl --user disable "$(svc_systemd_unit "$1")" 2>/dev/null || true
-      rm -f "$BRAIN_SYSTEMD_DIR/$(svc_systemd_unit "$1").service"
+      rm -f "$BRAIN_SYSTEMD_DIR/$(svc_systemd_unit "$1")".{service,timer}
       systemctl --user daemon-reload 2>/dev/null || true
       ;;
   esac
@@ -426,6 +438,11 @@ autostart_status() {
   else
     printf 'disabled: nothing starts the brain after a reboot (fix: brain autostart enable)\n'
   fi
+  if svc_is_active watchdog; then
+    printf 'watchdog: on (a server that dies restarts within a minute)\n'
+  else
+    printf 'watchdog: off — a server that dies after sleep stays down (fix: brain autostart enable)\n'
+  fi
   if [ "$os" = macos ]; then
     printf 'note: a launchd user agent only runs once someone is logged in.\n'
     printf '      On a dedicated Mac, turn on automatic login:\n'
@@ -445,9 +462,11 @@ autostart_enable() {
       || sudo loginctl enable-linger "$(id -un)"
   fi
   svc_install rc
+  svc_install watchdog
 }
 
 autostart_disable() {
+  svc_uninstall watchdog
   svc_uninstall rc
 }
 

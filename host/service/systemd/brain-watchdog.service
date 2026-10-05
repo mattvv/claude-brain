@@ -1,0 +1,8 @@
+[Unit]
+Description=claude-brain watchdog: revive dead Remote Control servers (claude-brain)
+
+[Service]
+# Run every minute by brain-watchdog.timer. Restarts any Remote Control
+# server whose claude process died.
+Type=oneshot
+ExecStart=%h/.local/bin/brain watchdog

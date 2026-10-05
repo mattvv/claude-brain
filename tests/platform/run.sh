@@ -133,8 +133,11 @@ echo "== launchd rendering =="
   brain_os() { printf 'macos\n'; }
   svc_install proxy >/dev/null 2>&1
   svc_install rc >/dev/null 2>&1
-  check "both agents rendered" \
-    '[ -f "$BRAIN_LAUNCHD_DIR/sh.claude-brain.proxy.plist" ] && [ -f "$BRAIN_LAUNCHD_DIR/sh.claude-brain.rc.plist" ]'
+  svc_install watchdog >/dev/null 2>&1
+  check "all agents rendered" \
+    '[ -f "$BRAIN_LAUNCHD_DIR/sh.claude-brain.proxy.plist" ] && [ -f "$BRAIN_LAUNCHD_DIR/sh.claude-brain.rc.plist" ] && [ -f "$BRAIN_LAUNCHD_DIR/sh.claude-brain.watchdog.plist" ]'
+  check "watchdog agent runs brain watchdog every minute" \
+    'grep -q "<string>watchdog</string>" "$BRAIN_LAUNCHD_DIR/sh.claude-brain.watchdog.plist" && grep -A1 StartInterval "$BRAIN_LAUNCHD_DIR/sh.claude-brain.watchdog.plist" | grep -q "<integer>60</integer>"'
   check "no placeholders survive"      '! grep -q "__" "$BRAIN_LAUNCHD_DIR"/*.plist'
   check "router agent restarts itself" 'grep -q KeepAlive "$BRAIN_LAUNCHD_DIR/sh.claude-brain.proxy.plist"'
   check "rc agent runs brain rc"       'grep -q "<string>rc</string>" "$BRAIN_LAUNCHD_DIR/sh.claude-brain.rc.plist"'
@@ -144,6 +147,21 @@ echo "== launchd rendering =="
     check "plists are valid (plistlib)" \
       'python3 -c "import plistlib,glob,sys;[plistlib.load(open(f,\"rb\")) for f in glob.glob(sys.argv[1])]" "$BRAIN_LAUNCHD_DIR/*.plist"'
   fi
+)
+
+echo "== systemd timers =="
+(
+  export BRAIN_SYSTEMD_DIR="$TMP/systemd" BRAIN_REPO_DIR="$REPO"
+  stub systemctl 'echo "$*" >> "'"$TMP"'/systemctl.log"'
+  brain_os() { printf 'linux\n'; }
+  svc_install watchdog >/dev/null 2>&1
+  check "watchdog service and timer installed" \
+    '[ -f "$BRAIN_SYSTEMD_DIR/brain-watchdog.service" ] && [ -f "$BRAIN_SYSTEMD_DIR/brain-watchdog.timer" ]'
+  check "the timer is enabled, not the oneshot" \
+    'grep -q "enable --now brain-watchdog.timer" "$TMP/systemctl.log"'
+  svc_install rc >/dev/null 2>&1
+  check "a unit without a timer is enabled directly" \
+    'grep -q "enable --now brain-rc$" "$TMP/systemctl.log"'
 )
 
 echo "== bash 3.2 floor (macOS ships bash 3.2 as /bin/bash) =="
