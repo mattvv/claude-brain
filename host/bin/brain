@@ -480,30 +480,43 @@ teleport_lock() {
 }
 teleport_unlock() { rmdir "$TELEPORT_DIR/.lock" 2>/dev/null || true; }
 
-# Empty the Taildrop inbox. `tailscale file get` cannot filter, so anything
-# that is not a teleport file was an ordinary transfer: it goes to ~/Downloads.
+# Collect arriving teleport files. Two places, because Tailscale delivers two
+# ways: a headless tailscaled holds files in an inbox until `tailscale file
+# get`, but the desktop apps (Linux systray, macOS) save them straight to the
+# Downloads folder. `file get` cannot filter, so anything else it hands over
+# was an ordinary transfer and goes to Downloads too.
 teleport_drain() {
-  local in="$TELEPORT_DIR/incoming" f err
+  local in="$TELEPORT_DIR/incoming" dl f err
+  dl="$(teleport_downloads_dir)"
   mkdir -p "$in" "$TELEPORT_DIR/inbox" "$TELEPORT_DIR/acks"
   if ! err="$(tailscale file get --conflict=rename "$in" 2>&1 >/dev/null)"; then
     case "$err" in
       *denied*|*permission*|*operator*)
         teleport_log "cannot read the Taildrop inbox — fix once with: sudo tailscale set --operator=$(id -un)" ;;
     esac
-    return 0
   fi
-  for f in "$in"/*; do
+  for f in "$in"/* "$dl"/brain-teleport-*; do
     [ -f "$f" ] || continue
     case "$(basename "$f")" in
       brain-teleport-ack-*.json) mv "$f" "$TELEPORT_DIR/acks/" ;;
       brain-teleport-*.tgz)      mv "$f" "$TELEPORT_DIR/inbox/" ;;
       *)
-        mkdir -p "$HOME/Downloads"
-        mv "$f" "$HOME/Downloads/"
-        teleport_log "moved Taildrop file '$(basename "$f")' to ~/Downloads"
+        [ "$(dirname "$f")" = "$in" ] || continue  # never move the user's own files
+        mkdir -p "$dl"
+        mv "$f" "$dl/"
+        teleport_log "moved Taildrop file '$(basename "$f")' to $dl"
         ;;
     esac
   done
+}
+
+# Where Taildrop's desktop apps save files: the XDG download dir on Linux
+# when one is configured, else ~/Downloads.
+teleport_downloads_dir() {
+  local d=""
+  command -v xdg-user-dir >/dev/null 2>&1 && d="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
+  { [ -n "$d" ] && [ "$d" != "$HOME" ]; } || d="$HOME/Downloads"
+  printf '%s\n' "$d"
 }
 
 # github.com/owner/repo, whatever the URL spelling.
