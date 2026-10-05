@@ -216,6 +216,25 @@ check "brain multi launch command runs (env options before assignments)" \
 brain multi >/dev/null 2>&1
 check "default brain multi still runs" 'run_launch && [ "$(envof ANTHROPIC_BASE_URL)" = http://127.0.0.1:8317 ]'
 
+echo "== checkouts outside ~/repos =="
+brain repo add org/elsewhere --dir "$H/Documents/nav/elsewhere" --account work >/dev/null 2>&1 || true
+check "a failed clone leaves no pin and no link" \
+  '! grep -q "^elsewhere=" "$H/.config/brain/repo-accounts" && [ ! -e "$H/repos/elsewhere" ]'
+rm -rf "$H/Documents/nav"
+mkdir -p "$H/Documents/nav"; git init -q "$H/Documents/nav/core2"
+brain repo add org/core2 --dir "$H/Documents/nav/core2" --account work >/dev/null 2>&1
+check "--dir links ~/repos/<name> to the checkout" \
+  '[ -L "$H/repos/core2" ] && [ "$(cd -P "$H/repos/core2" && pwd)" = "$(cd -P "$H/Documents/nav/core2" && pwd)" ]'
+check "--dir repo is pinned to its set" 'grep -qx core2=work "$H/.config/brain/repo-accounts"'
+check "--dir repo session runs in the real checkout with the set's login" \
+  'run_launch && [ "$(envof CLAUDE_CONFIG_DIR)" = "$H/.claude-work" ] && grep -q "cd $(cd -P "$H/Documents/nav/core2" && pwd)" "$TMP/launch"'
+check "--dir refuses to replace a different checkout" \
+  '! brain repo add org/core2 --dir "$H/Documents/other/core2" --account work >/dev/null 2>&1'
+brain repo serve core2 >/dev/null 2>&1
+check "serve finds a --dir repo through its link" 'run_launch && [ "$(envof BRAIN_ACCOUNT)" = work ]'
+brain repo add core2 --account default >/dev/null 2>&1 || true
+rm -f "$H/repos/core2"; sed -i.bak '/^core2=/d' "$H/.config/brain/repo-accounts"; rm -f "$H/.config/brain/repo-accounts.bak"
+
 echo "== ports =="
 check "8317 is refused for a set"        '! brain account add p1 --port 8317 >/dev/null 2>&1'
 check "another set's port is refused"    '! brain account add p2 --port 8318 >/dev/null 2>&1'

@@ -193,6 +193,7 @@ seed_trust() {
 # RC needs api.anthropic.com, so any proxy override is scrubbed.
 rc_server() {
   local dir="$1" tmux_name="$2" prefix="$3"
+  dir="$(cd -P "$dir" && pwd)"
   need tmux jq
   claude_bin >/dev/null || die "claude not installed — run: brain setup"
   install_agents "$AGENTS_RC_SRC"
@@ -256,9 +257,22 @@ cmd_repo() {
   local sub="${1:-ls}" arg="${2:-}"
   case "$sub" in
     add)
-      [ -n "$arg" ] || die "usage: brain repo add <owner/name | git-url> [name] [--account NAME]"
+      # --dir PATH puts the checkout somewhere of the user's choosing (say
+      # ~/Documents/work/core); ~/repos/<name> then links to it, so serve, stop
+      # and ls find it like any other repo.
+      local want_dir="" rest=() a
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --dir)   [ $# -ge 2 ] || die "--dir needs a path"; want_dir="$2"; shift 2 ;;
+          --dir=*) want_dir="${1#--dir=}"; shift ;;
+          *)       rest+=("$1"); shift ;;
+        esac
+      done
+      arg="${rest[0]:-}"
+      [ -n "$arg" ] || die "usage: brain repo add <owner/name | git-url> [name] [--dir PATH] [--account NAME]"
       need git jq
-      local name="${3:-}"
+      local name="${rest[1]:-}"
       [ -n "$name" ] || { name="${arg%/}"; name="${name##*/}"; name="${name%.git}"; }
       name="${name%/}"
       repo_name_ok "$name" || die "bad repo name: $name (use letters, digits, . _ -)"
@@ -276,14 +290,39 @@ cmd_repo() {
       if [ "$acct" != "$cur" ] && tmux has-session -t "=brain-rc-$name" 2>/dev/null; then
         die "$name is being served with account set $cur — stop it first: brain repo stop $name"
       fi
-      repo_account_set "$name" "$acct"
-      [ "$acct" = default ] || info "$name uses account set: $acct"
+      # Hand over to the target set; the flag carries the decision across.
       if [ "$acct" != "$BRAIN_ACCOUNT" ]; then
-        reexec_account "$acct" repo add "$arg" "$name"
+        if [ -n "$want_dir" ]; then
+          exec env BRAIN_ACCOUNT="$acct" BRAIN_ACCOUNT_FLAG=1 "$SCRIPT_DIR/brain" repo add "$arg" "$name" --dir "$want_dir"
+        fi
+        exec env BRAIN_ACCOUNT="$acct" BRAIN_ACCOUNT_FLAG=1 "$SCRIPT_DIR/brain" repo add "$arg" "$name"
       fi
       mkdir -p "$REPOS_DIR"
       local dir="$REPOS_DIR/$name"
-      if [ ! -d "$dir" ]; then
+      if [ -n "$want_dir" ]; then
+        case "$want_dir" in "~"/*) want_dir="$HOME/${want_dir#\~/}" ;; esac
+        mkdir -p "$(dirname "$want_dir")"
+        want_dir="$(cd -P "$(dirname "$want_dir")" && pwd)/$(basename "$want_dir")"
+        if [ -L "$dir" ]; then
+          [ "$(cd -P "$dir" 2>/dev/null && pwd)" = "$want_dir" ] \
+            || die "$dir already points somewhere else: $(readlink "$dir")"
+        elif [ -e "$dir" ]; then
+          die "$dir already exists as a checkout — serve that one, or pick another name"
+        fi
+        if [ ! -d "$want_dir" ]; then
+          info "cloning $arg into $want_dir"
+          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            gh repo clone "$arg" "$want_dir"
+          else
+            git clone "$arg" "$want_dir"
+          fi
+        else
+          git -C "$want_dir" rev-parse --git-dir >/dev/null 2>&1 \
+            || die "$want_dir exists but is not a git checkout"
+          step_done "already cloned: $want_dir"
+        fi
+        [ -L "$dir" ] || { ln -s "$want_dir" "$dir"; step_done "linked $dir -> $want_dir"; }
+      elif [ ! -d "$dir" ]; then
         info "cloning $arg into $dir"
         if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
           gh repo clone "$arg" "$dir"
@@ -293,6 +332,9 @@ cmd_repo() {
       else
         step_done "already cloned: $dir"
       fi
+      # Pin only once the checkout exists: a failed clone must not leave a pin.
+      repo_account_set "$name" "$acct"
+      [ "$acct" = default ] || info "$name uses account set: $acct"
       rc_server "$dir" "brain-rc-$name" "$name"
       ;;
     serve)
