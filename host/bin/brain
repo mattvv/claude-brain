@@ -188,6 +188,20 @@ seed_trust() {
     "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
 }
 
+# An interactive `claude` in a set that has only ever run Remote Control stops
+# at the first-run screens (theme picker, …) with nobody there to answer —
+# seen on a teleported session. Mark onboarding done, borrowing the default
+# set's theme when this set has none.
+seed_onboarding() {
+  local cfg="$BRAIN_CLAUDE_JSON" theme
+  mkdir -p "$(dirname "$cfg")"
+  [ -s "$cfg" ] || echo '{}' > "$cfg"
+  theme="$(jq -r '.theme // empty' "$HOME/.claude.json" 2>/dev/null || true)"
+  jq --arg t "${theme:-dark}" \
+    '.hasCompletedOnboarding = true | .theme = (.theme // $t)' \
+    "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+}
+
 # Start (or attach to) a persistent Remote Control server for a directory.
 # Sessions spawn on demand from the Claude app / claude.ai/code (capacity 32).
 # RC needs api.anthropic.com, so any proxy override is scrubbed.
@@ -768,6 +782,7 @@ teleport_start() {
     "$x/transcript.jsonl" > "$BRAIN_CLAUDE_DIR/projects/$slug/$id.jsonl"
   [ -d "$x/session-dir" ] && cp -R "$x/session-dir" "$BRAIN_CLAUDE_DIR/projects/$slug/$id"
   seed_trust "$cwd"
+  seed_onboarding
 
   inner="$(claude_bin) --resume $(printf %q "$id") --remote-control $(printf %q "$sname") $(printf %q "$recap")"
   # A newer teleport of the same conversation replaces the older copy.
@@ -780,14 +795,17 @@ teleport_start() {
     [ -n "$bridge" ] && { url="https://claude.ai/code/$bridge"; break; }
     sleep 1
   done
-  # Only a session that is still running counts: the sender ends the
-  # original on an "ok" receipt and keeps it on anything else.
-  if tmux has-session -t "=brain-teleport-$short" 2>/dev/null; then status=ok; else status=failed; fi
-  if [ "$status" = ok ]; then
-    teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT)${url:+ — $url}${url:- — still connecting; see: tmux attach -t brain-teleport-$short}"
-  else
-    teleport_log "$id: the resumed session exited right after starting in $cwd (account set $BRAIN_ACCOUNT) — the original was kept"
-  fi
+  # Only a session that reached claude.ai counts: the sender ends the
+  # original on an "ok" receipt and keeps it on anything else. Alive but
+  # without a link means it is waiting on some prompt nobody can see.
+  if [ -n "$url" ]; then status=ok
+  elif tmux has-session -t "=brain-teleport-$short" 2>/dev/null; then status=stuck
+  else status=failed; fi
+  case "$status" in
+    ok)    teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT) — $url" ;;
+    stuck) teleport_log "$id started in $cwd (account set $BRAIN_ACCOUNT) but never reached claude.ai — look with: tmux attach -t brain-teleport-$short (the original was kept)" ;;
+    *)     teleport_log "$id: the resumed session exited right after starting in $cwd (account set $BRAIN_ACCOUNT) — the original was kept" ;;
+  esac
 
   if [ -n "$from" ] && command -v tailscale >/dev/null 2>&1; then
     jq -n --arg id "$id" --arg host "$(teleport_self)" --arg url "$url" --arg dir "$cwd" \
@@ -837,7 +855,7 @@ teleport_await() {
         rm -f "$ack"
         kill -TERM "$pid" 2>/dev/null || true
       else
-        teleport_log "$id did not start on $host — keeping the original session (see brain teleport log there)"
+        teleport_log "$id did not come up on $host ($(jq -r '.status // "failed"' "$ack")) — keeping the original session (see brain teleport log there)"
         rm -f "$ack"
       fi
       return 0
