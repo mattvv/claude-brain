@@ -649,7 +649,7 @@ teleport_find_repo() {
 # teleport_land PKG — rebuild the session described by PKG and start it.
 # Prints the new claude.ai link (empty if it did not show up in time).
 teleport_land() {
-  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct
+  local pkg="$1" x m id remote head wip branch root rel repo short wt cwd acct base
   x="$(mktemp -d)"
   tar xzf "$pkg" -C "$x"
   m="$x/manifest.json"
@@ -662,7 +662,10 @@ teleport_land() {
 
   if [ -z "$remote" ]; then
     acct="$(teleport_choose_account "$m" "")"
-    wt="$REPOS_DIR/.teleport/$(basename "$root")-$short"
+    # A session teleported back and forth already sits in "<dir>-<id8>";
+    # don't stack another suffix on each trip.
+    base="$(basename "$root")"; base="${base%%-"$short"*}"
+    wt="$REPOS_DIR/.teleport/$base-$short"
     mkdir -p "$wt"
   else
     if ! repo="$(teleport_find_repo "$remote")"; then
@@ -841,6 +844,20 @@ teleport_receive() {
   teleport_unlock
 }
 
+# End the original session's process and say whether it went: SIGTERM, then
+# SIGKILL if it is still there after 15s. A copy that shows up again later
+# was started anew (e.g. `claude --continue` in its terminal), not missed.
+teleport_end() {
+  local pid="$1" i
+  kill -TERM "$pid" 2>/dev/null || { teleport_log "pid $pid was already gone"; return 0; }
+  for i in $(seq 15); do
+    kill -0 "$pid" 2>/dev/null || { teleport_log "original session (pid $pid) ended"; return 0; }
+    sleep 1
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  teleport_log "original session (pid $pid) ignored SIGTERM for 15s — killed"
+}
+
 # Runs detached after a send: wait for the receipt, then end the original.
 teleport_await() {
   local id="$1" pid="$2" nonce="$3" i ack url host
@@ -851,9 +868,9 @@ teleport_await() {
       if [ "$(jq -r '.nonce // ""' "$ack")" != "$nonce" ]; then rm -f "$ack"; continue; fi
       url="$(jq -r '.url // empty' "$ack")"; host="$(jq -r .host "$ack")"
       if [ "$(jq -r '.status // "ok"' "$ack")" = ok ]; then
-        teleport_log "$id confirmed on $host${url:+ — $url}; ending the original session"
+        teleport_log "$id confirmed on $host${url:+ — $url}; ending the original session (pid $pid)"
         rm -f "$ack"
-        kill -TERM "$pid" 2>/dev/null || true
+        teleport_end "$pid"
       else
         teleport_log "$id did not come up on $host ($(jq -r '.status // "failed"' "$ack")) — keeping the original session (see brain teleport log there)"
         rm -f "$ack"
