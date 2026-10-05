@@ -228,6 +228,55 @@ check "a repo pinned on the target lands in its pinned set" \
   'grep -q "BRAIN_ACCOUNT=home CLAUDE_CONFIG_DIR=$DP/.claude-home" "$LOG" && [ -n "$(ls "$DP/.claude-home/projects")" ]'
 check "and the override is logged" 'grep -q "pinned to account set home here" "$DP/.local/state/brain/teleport/log"'
 
+echo "== account identity, not set name =="
+# Seen live: on the Mac "default" is the work login; on Linux the work login
+# is the set called "work" and "default" is personal. Landing must follow the
+# login, not the name.
+IID=12121212-3434-5656-7878-909090909090
+IS="$TMP/srci"; mkdir -p "$IS"
+git clone -q "$ORIGIN" "$IS/code/proj" 2>/dev/null
+ISLUG="$(printf '%s' "$IS/code/proj" | sed 's|[^A-Za-z0-9]|-|g')"
+mkdir -p "$IS/.claude/projects/$ISLUG"
+echo '{"oauthAccount":{"accountUuid":"U-WORK","organizationUuid":"O-NAV","emailAddress":"me@work.example","organizationName":"Work"}}' > "$IS/.claude.json"
+{ printf '{"type":"user","cwd":"%s","message":"hi"}\n' "$IS/code/proj"
+  printf '{"type":"ai-title","aiTitle":"Early title"}\n'
+  printf '{"type":"ai-title","aiTitle":"Fix the login page"}\n'
+} > "$IS/.claude/projects/$ISLUG/$IID.jsonl"
+OUTI="$TMP/outi"; mkdir -p "$OUTI"
+HOME="$IS" FAKE_HOST=matts-mbp "${BASH:-bash}" "$BRAIN" teleport _pack "$IID" "$OUTI" >/dev/null 2>&1
+PKGI="$OUTI/brain-teleport-$IID.tgz"
+MI="$(tar xzf "$PKGI" -O ./manifest.json)"
+eq "records who the session is signed in as" U-WORK/O-NAV "$(jq -r '.identity.account_uuid + "/" + .identity.org_uuid' <<<"$MI")"
+check "and no secrets" '! printf %s "$MI" | grep -qiE "token|secret|refresh"'
+eq "records the latest title" "Fix the login page" "$(jq -r .title <<<"$MI")"
+
+DI="$TMP/dsti"; git clone -q "$ORIGIN" "$DI/repos/proj" 2>/dev/null
+echo '{"oauthAccount":{"accountUuid":"U-PERSONAL","organizationUuid":"O-ME"}}' > "$DI/.claude.json"
+mkdir -p "$DI/.config/brain/accounts/work" "$DI/.claude-work"
+echo PORT=8318 > "$DI/.config/brain/accounts/work/account"
+echo '{"oauthAccount":{"accountUuid":"U-WORK","organizationUuid":"O-NAV"}}' > "$DI/.claude-work/.claude.json"
+: > "$LOG"
+HOME="$DI" FAKE_HOST=mattvv-linux BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGI" >/dev/null 2>&1
+check "a default-set session lands in the target set with the same login" \
+  'grep -q "BRAIN_ACCOUNT=work CLAUDE_CONFIG_DIR=$DI/.claude-work" "$LOG" && [ -n "$(ls "$DI/.claude-work/projects")" ] && [ ! -d "$DI/.claude/projects" ]'
+check "named after its title and where it came from" \
+  'tr -d "\\\\" < "$LOG" | grep -qF -- "--remote-control Fix the login page (from matts-mbp)"'
+check "opens with a recap turn" \
+  'tr -d "\\\\" < "$LOG" | grep -qF "teleported from matts-mbp to mattvv-linux" && tr -d "\\\\" < "$LOG" | grep -qF "short recap"'
+
+: > "$LOG"
+HOME="$DI" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGI" >/dev/null 2>&1
+check "teleporting the same session again replaces the old copy" \
+  'grep -q "tmux kill-session -t =brain-teleport-12121212" "$LOG" && grep -q "new-session" "$LOG" && [ "$(ls -d "$DI"/repos/.teleport/proj-12121212* | wc -l | tr -d " ")" = 2 ]'
+
+DN="$TMP/dstn"; git clone -q "$ORIGIN" "$DN/repos/proj" 2>/dev/null
+echo '{"oauthAccount":{"accountUuid":"U-PERSONAL","organizationUuid":"O-ME"}}' > "$DN/.claude.json"
+: > "$LOG"
+check "refused when no set here has that login" \
+  '! HOME="$DN" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$PKGI" >/dev/null 2>&1'
+check "nothing built or started" '[ ! -e "$DN/repos/.teleport/proj-12121212" ] && ! grep -q new-session "$LOG"'
+check "the log names the login" 'grep -q "signed in as me@work.example" "$DN/.local/state/brain/teleport/log"'
+
 echo "== retry after creating the set =="
 DR="$TMP/dstr"; mkdir -p "$DR/inbox-src"; git clone -q "$ORIGIN" "$DR/repos/proj" 2>/dev/null
 cp "$PKGW" "$DR/inbox-src/"
