@@ -462,7 +462,7 @@ cmd_watchdog() {
 #           only then does the original session end. No receipt within ten
 #           minutes and the original is left running.
 TELEPORT_DIR="$BRAIN_STATE_DIR/teleport"
-TELEPORT_WAIT="${BRAIN_TELEPORT_WAIT:-60}"  # seconds to wait for the landed session's link
+TELEPORT_WAIT="${BRAIN_TELEPORT_WAIT:-120}"  # seconds to wait for the landed session's link
 
 teleport_log() {
   mkdir -p "$TELEPORT_DIR"
@@ -612,10 +612,10 @@ teleport_pack() {
   jq -n --arg id "$id" --arg from "$(teleport_self)" --arg remote "$remote" \
     --arg head "$head" --arg wip "$wip" --arg branch "$branch" --arg root "$root" \
     --arg rel "$rel" --arg name "${name:-$(basename "$root")}" --arg account "$acct" \
-    --arg title "$title" --argjson identity "$identity" \
+    --arg title "$title" --argjson identity "$identity" --arg nonce "${BRAIN_TELEPORT_NONCE:-}" \
     '{v: 1, id: $id, from: $from, remote: $remote, head: $head, wip: $wip,
       branch: $branch, root: $root, rel: $rel, name: $name, account: $account,
-      title: $title, identity: $identity}' > "$work/pkg/manifest.json"
+      title: $title, identity: $identity, nonce: $nonce}' > "$work/pkg/manifest.json"
   tar czf "$out/brain-teleport-$id.tgz" -C "$work/pkg" .
   rm -rf "$work"
 }
@@ -745,7 +745,7 @@ teleport_choose_account() {
 # landing, run as the target set: file the conversation in this set's Claude
 # dir, trust the directory, start it with this set's login, send the receipt.
 teleport_start() {
-  local x="$1" wt="$2" cwd="$3" m id root sname from short slug i bridge url="" inner here where recap
+  local x="$1" wt="$2" cwd="$3" m id root sname from short slug i bridge url="" inner here where recap status
   m="$x/manifest.json"
   id="$(jq -r .id "$m")"; root="$(jq -r .root "$m")"; from="$(jq -r .from "$m")"
   short="${id:0:8}"
@@ -780,12 +780,20 @@ teleport_start() {
     [ -n "$bridge" ] && { url="https://claude.ai/code/$bridge"; break; }
     sleep 1
   done
-  teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT)${url:+ — $url}"
+  # Only a session that is still running counts: the sender ends the
+  # original on an "ok" receipt and keeps it on anything else.
+  if tmux has-session -t "=brain-teleport-$short" 2>/dev/null; then status=ok; else status=failed; fi
+  if [ "$status" = ok ]; then
+    teleport_log "landed $id from ${from:-?} in $cwd (account set $BRAIN_ACCOUNT)${url:+ — $url}${url:- — still connecting; see: tmux attach -t brain-teleport-$short}"
+  else
+    teleport_log "$id: the resumed session exited right after starting in $cwd (account set $BRAIN_ACCOUNT) — the original was kept"
+  fi
 
   if [ -n "$from" ] && command -v tailscale >/dev/null 2>&1; then
     jq -n --arg id "$id" --arg host "$(teleport_self)" --arg url "$url" --arg dir "$cwd" \
-      --arg account "$BRAIN_ACCOUNT" \
-      '{id: $id, host: $host, url: $url, dir: $dir, account: $account}' > "$x/brain-teleport-ack-$id.json"
+      --arg account "$BRAIN_ACCOUNT" --arg status "$status" --arg nonce "$(jq -r '.nonce // ""' "$m")" \
+      '{id: $id, host: $host, url: $url, dir: $dir, account: $account, status: $status, nonce: $nonce}' \
+      > "$x/brain-teleport-ack-$id.json"
     tailscale file cp "$x/brain-teleport-ack-$id.json" "$from:" >/dev/null 2>&1 \
       || teleport_log "could not send the receipt for $id back to $from"
   fi
@@ -817,15 +825,23 @@ teleport_receive() {
 
 # Runs detached after a send: wait for the receipt, then end the original.
 teleport_await() {
-  local id="$1" pid="$2" i ack url
+  local id="$1" pid="$2" nonce="$3" i ack url host
   for i in $(seq 60); do
-    ack="$(find "$TELEPORT_DIR/acks" -name "brain-teleport-ack-$id*.json" -print -quit 2>/dev/null)"
-    if [ -n "$ack" ]; then
-      url="$(jq -r '.url // empty' "$ack")"
-      teleport_log "$id confirmed on $(jq -r .host "$ack")${url:+ — $url}; ending the original session"
-      kill -TERM "$pid" 2>/dev/null || true
+    for ack in "$TELEPORT_DIR/acks/brain-teleport-ack-$id"*.json; do
+      [ -f "$ack" ] || continue
+      # A receipt from an earlier teleport of the same session is not ours.
+      if [ "$(jq -r '.nonce // ""' "$ack")" != "$nonce" ]; then rm -f "$ack"; continue; fi
+      url="$(jq -r '.url // empty' "$ack")"; host="$(jq -r .host "$ack")"
+      if [ "$(jq -r '.status // "ok"' "$ack")" = ok ]; then
+        teleport_log "$id confirmed on $host${url:+ — $url}; ending the original session"
+        rm -f "$ack"
+        kill -TERM "$pid" 2>/dev/null || true
+      else
+        teleport_log "$id did not start on $host — keeping the original session (see brain teleport log there)"
+        rm -f "$ack"
+      fi
       return 0
-    fi
+    done
     if teleport_lock; then teleport_drain; teleport_unlock; fi
     sleep 10
   done
@@ -849,7 +865,7 @@ cmd_teleport() {
       done
       ok "$n package(s) queued again — the watchdog lands them within a minute"
       return ;;
-    _await) teleport_await "$2" "$3"; return ;;
+    _await) teleport_await "$2" "$3" "${4:-}"; return ;;
     log)    tail -n 20 "$TELEPORT_DIR/log" 2>/dev/null || info "nothing teleported yet"; return ;;
   esac
   id="${2:-${CLAUDE_CODE_SESSION_ID:-}}"
@@ -858,9 +874,11 @@ cmd_teleport() {
   tailscale file cp --targets 2>/dev/null | awk -v h="$host" '$2 == h { f = 1 } END { exit !f }' \
     || die "$host is not a Taildrop target here (see: tailscale file cp --targets)"
 
-  local out
+  local out nonce
   out="$(mktemp -d)"
-  teleport_pack "$id" "$out"
+  nonce="$(date +%s)-$$-$RANDOM"
+  rm -f "$TELEPORT_DIR/acks/brain-teleport-ack-$id"*.json
+  BRAIN_TELEPORT_NONCE="$nonce" teleport_pack "$id" "$out"
   tailscale file cp "$out/brain-teleport-$id.tgz" "$host:" || die "Taildrop to $host failed"
   rm -rf "$out"
   teleport_log "sent $id to $host"
@@ -868,7 +886,7 @@ cmd_teleport() {
 
   # Inside the session being teleported: end it once the target confirms.
   if [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] && [ -n "${CLAUDE_PID:-}" ]; then
-    nohup "$0" teleport _await "$id" "$CLAUDE_PID" >/dev/null 2>&1 &
+    nohup "$0" teleport _await "$id" "$CLAUDE_PID" "$nonce" >/dev/null 2>&1 &
     info "this session ends once $host confirms (up to 10 minutes; else it stays open)"
   fi
 }
