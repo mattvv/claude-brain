@@ -164,6 +164,22 @@ OUT4="$TMP/out4"; mkdir -p "$OUT4"
 HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$BID" "$OUT4" >/dev/null 2>&1
 check "packs a 20k-line conversation" '[ -f "$OUT4/brain-teleport-$BID.tgz" ]'
 
+echo "== desktop Taildrop: files saved straight to ~/Downloads =="
+# The Linux systray and macOS apps save Taildrop files to Downloads instead of
+# holding them for `tailscale file get` — the receiver must look there too.
+DD="$TMP/dstd"; git clone -q "$ORIGIN" "$DD/repos/proj" 2>/dev/null
+mkdir -p "$DD/Downloads"
+cp "$OUT2/brain-teleport-$ID.tgz" "$DD/Downloads/"
+echo '{"id":"x"}' > "$DD/Downloads/brain-teleport-ack-x.json"
+echo mine > "$DD/Downloads/brain-teleport-notes.txt"
+echo mine > "$DD/Downloads/report.pdf"
+HOME="$DD" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" watchdog >/dev/null 2>&1
+check "a package saved to Downloads is landed" \
+  '[ -d "$DD/repos/.teleport/proj-11111111" ] && [ -f "$DD/.local/state/brain/teleport/done/brain-teleport-$ID.tgz" ] && [ ! -e "$DD/Downloads/brain-teleport-$ID.tgz" ]'
+check "a receipt saved to Downloads is collected" '[ -f "$DD/.local/state/brain/teleport/acks/brain-teleport-ack-x.json" ]'
+check "the user's own Downloads are left alone" \
+  '[ -f "$DD/Downloads/report.pdf" ] && [ -f "$DD/Downloads/brain-teleport-notes.txt" ]'
+
 echo "== account sets =="
 # A session in the "work" set lives in ~/.claude-work and must land there,
 # under the work login — never in another set's.
