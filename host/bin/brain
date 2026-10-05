@@ -397,16 +397,22 @@ teleport_norm_remote() {
     | tr '[:upper:]' '[:lower:]'
 }
 
-teleport_self() { tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty'; }
+# This machine's Taildrop name: the first label of its MagicDNS name
+# (matts-mbp), which is what `tailscale file cp` takes — not the display
+# HostName (Matts-MBP).
+teleport_self() {
+  tailscale status --json 2>/dev/null \
+    | jq -r '(.Self.DNSName // "" | split(".")[0]) as $d | if $d != "" then $d else (.Self.HostName // empty) end'
+}
 
 # teleport_pack SESSION_ID OUTDIR — writes OUTDIR/brain-teleport-<id>.tgz.
 teleport_pack() {
   local id="$1" out="$2" transcript cwd root rel="" remote="" head="" branch="" tree wip="" tip ref work name
-  transcript="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$id.jsonl" 2>/dev/null | head -1)"
+  transcript="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$id.jsonl" -print -quit 2>/dev/null)"
   [ -n "$transcript" ] || die "no transcript for session $id under ~/.claude/projects"
   # The directory the session was started in — `claude --resume` looks the
   # conversation up by it.
-  cwd="$(jq -r 'select(.cwd != null) | .cwd' "$transcript" | head -1)"
+  cwd="$(jq -rn 'first(inputs | select(.cwd != null) | .cwd)' "$transcript")"
   [ -d "$cwd" ] || die "the session's directory is gone: $cwd"
   cwd="$(cd -P "$cwd" && pwd)"
   work="$(mktemp -d)"
@@ -574,7 +580,7 @@ teleport_receive() {
 teleport_await() {
   local id="$1" pid="$2" i ack url
   for i in $(seq 60); do
-    ack="$(find "$TELEPORT_DIR/acks" -name "brain-teleport-ack-$id*.json" 2>/dev/null | head -1)"
+    ack="$(find "$TELEPORT_DIR/acks" -name "brain-teleport-ack-$id*.json" -print -quit 2>/dev/null)"
     if [ -n "$ack" ]; then
       url="$(jq -r '.url // empty' "$ack")"
       teleport_log "$id confirmed on $(jq -r .host "$ack")${url:+ — $url}; ending the original session"
@@ -600,7 +606,7 @@ cmd_teleport() {
   id="${2:-${CLAUDE_CODE_SESSION_ID:-}}"
   [ -n "$id" ] || die "no session to teleport: run this inside a Claude session, or pass a session id"
   need tailscale jq git tar
-  tailscale file cp --targets 2>/dev/null | awk '{print $2}' | grep -qxF "$host" \
+  tailscale file cp --targets 2>/dev/null | awk -v h="$host" '$2 == h { f = 1 } END { exit !f }' \
     || die "$host is not a Taildrop target here (see: tailscale file cp --targets)"
 
   local out
