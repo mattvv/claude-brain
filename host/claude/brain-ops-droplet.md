@@ -32,6 +32,13 @@ with the Bash tool and relay the URL to the user in chat:
   in the background, relay the printed approval URL to the user (they need the Tailscale
   app on their phone — tailscale.com/download), and confirm with `brain status`.
 
+**Move or reopen sessions**: `brain teleport <machine>` moves the current session
+(conversation, branch, uncommitted work) to the brain on another of the user's machines —
+run it when they ask to "teleport this to X". `brain attach [words]` lists this machine's
+sessions or reopens one in a terminal under the right account set, bringing it over from
+another brain if that's where it lives. It's interactive (tmux), so give the user the
+command to type rather than running it for them.
+
 **Set up repos for phone sessions**: when the user wants to work on one of their
 repositories, run `brain repo add <owner/name>` (clones with their linked GitHub account
 and starts a Remote Control server for that repo — its sessions then appear in their

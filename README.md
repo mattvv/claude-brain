@@ -167,6 +167,33 @@ short recap of what it was doing, so you can pick up straight from your phone.
 `tailscale file cp --targets` lists the machines you can send to; `brain teleport log`
 shows what came and went.
 
+## Opening a session in your terminal (attach)
+
+Sessions you start from the Claude app run on your brain with no terminal attached. When
+you'd rather drive one from a real terminal on that machine — or you closed one by accident
+— `brain attach` gets you there:
+
+```
+brain attach            # recent sessions on this machine: title, folder, account set, state
+brain attach twilio     # open the one whose title matches (or give an id prefix)
+```
+
+It reopens the conversation in its own folder, **under the account set it belongs to** (a
+work session opens with your work login, not your personal one), still connected to the
+Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
+`brain attach twilio` again puts you back.
+
+- **Closed** → reopened right away.
+- **Running on your brain from the app** → it asks first, then moves it into your terminal.
+  Same history; the app gets a new entry for it (a running session can't be handed between
+  processes).
+- **Already open in another terminal** → refused, with which terminal has it, so the same
+  conversation never runs twice.
+- **On another of your machines** → if nothing here matches — or this machine's copy was
+  teleported away — it asks your other brains, shows where the session is and whether it's
+  running there, and offers to bring it over (a teleport, ending the copy there only if you
+  say so). It lands within a minute or two and you're attached.
+
 ## Everyday use
 
 | Command | What it does |
@@ -176,6 +203,7 @@ shows what came and went.
 | `brain account add <name>` | A second set of logins (say, your work Claude + ChatGPT) kept fully apart from your own — then `brain auth anthropic --account <name>`, `brain auth chatgpt --account <name>` and `brain repo add <owner/name> --account <name>`. See [Work and personal accounts](#work-and-personal-accounts) |
 | `brain status` | Health check: host, router, linked accounts, sessions |
 | `brain autostart enable` | Come back automatically after a reboot, and restart the server within a minute if it dies (e.g. after a long sleep) — `disable` / `status` |
+| `brain attach [words]` | Open a session in this terminal — list recent ones, or pick one by words from its title; brings it over from another machine if that's where it is ([details](#opening-a-session-in-your-terminal-attach)) |
 | `brain teleport <machine>` | Move this session — conversation, branch and uncommitted work — to the brain on another machine ([details](#moving-a-session-to-another-brain-teleport)) |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
@@ -366,6 +394,8 @@ The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.m
 - **Sessions went offline after the laptop slept** → with `brain autostart enable` the
   server is back within a minute of waking. It brings back its most recent session; start
   new ones for the rest (their history is still on disk).
+- **Closed a session by accident** → `brain attach <words from its title>` reopens it under
+  the right login, in its folder, and back on the Claude app.
 - **A teleported session never showed up** → `brain teleport log` on both machines. The
   usual causes: the target's watchdog is off (`brain autostart status`), or on Linux
   Tailscale isn't letting brain read Taildrop (`sudo tailscale set --operator=$USER`).
@@ -379,6 +409,10 @@ The quick ones — full list in [docs/troubleshooting.md](docs/troubleshooting.m
 - Teleport sends sessions over Taildrop, which only moves files between your own devices.
   A teleported package holds the conversation and your uncommitted code, so it goes nowhere
   else; anything arriving by Taildrop that isn't a teleport is moved to `~/Downloads`.
+- `brain attach` can ask your other brains which sessions they have (titles, folders, and
+  whether each is running) and ask one to send a session over. Only your own devices can
+  Taildrop to a brain, a running session there is only ended when you say so, and every
+  request is logged in `brain teleport log`.
 - Never share the files in `~/.config/brain/` or `~/.cli-proxy-api/`: they hold live login
   tokens for your accounts. On a personal machine, keep full-disk encryption on.
 - On your own computer, claude-brain backs up your Claude Code settings before touching
