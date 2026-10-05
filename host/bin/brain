@@ -7,8 +7,10 @@
 #   brain multi      parable-style multi-model session (no Remote Control)
 #   brain status     health overview: host, proxy, logins, sessions
 #   brain autostart  come back automatically after a reboot (enable|disable|status)
-#   brain watchdog   restart RC servers that died, e.g. after sleep (run
-#                    every minute by autostart; safe to run by hand)
+#   brain watchdog   restart RC servers that died, e.g. after sleep, and land
+#                    teleported sessions (run every minute by autostart)
+#   brain teleport M move this Claude session (code included) to the brain
+#                    on machine M over Taildrop; `teleport log` for history
 #   brain keepawake  stop this machine from sleeping (shows what it will change)
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
 #                    for a world-reachable Funnel URL; 'off' to stop)
@@ -320,6 +322,288 @@ cmd_watchdog() {
     [ -f "$f" ] || continue
     rc_watch_one "$(basename "$f")"
   done
+  teleport_receive
+}
+
+# ---------------------------------------------------------------- teleport
+# Move a Claude session to another brain: `brain teleport <machine>`.
+#
+#   pack    the conversation (~/.claude/projects/*/<id>.jsonl, plus subagent
+#           transcripts) and the repo state: origin URL, HEAD, branch, and any
+#           unpushed commits + uncommitted/untracked changes as a git bundle.
+#           The changes are committed through a scratch index, so the source
+#           checkout is never touched.
+#   send    the package over Taildrop — no new ports, no SSH, and only your
+#           own devices can send to you.
+#   land    on the target (its watchdog collects packages every minute): find
+#           or clone the repo, rebuild the exact code state in a fresh git
+#           worktree, put the conversation where `claude --resume` looks for
+#           that directory, and start it with Remote Control so it shows up
+#           on claude.ai under the target machine.
+#   confirm the target Taildrops back a receipt with the new session's link;
+#           only then does the original session end. No receipt within ten
+#           minutes and the original is left running.
+TELEPORT_DIR="$BRAIN_STATE_DIR/teleport"
+TELEPORT_WAIT="${BRAIN_TELEPORT_WAIT:-60}"  # seconds to wait for the landed session's link
+
+teleport_log() {
+  mkdir -p "$TELEPORT_DIR"
+  printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$TELEPORT_DIR/log"
+}
+
+# One drainer at a time (the watchdog and a sender waiting for its receipt
+# both read the Taildrop inbox). mkdir is atomic; a lock older than ten
+# minutes belonged to a run that died.
+teleport_lock() {
+  mkdir -p "$TELEPORT_DIR"
+  mkdir "$TELEPORT_DIR/.lock" 2>/dev/null && return 0
+  if [ -n "$(find "$TELEPORT_DIR/.lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+    rmdir "$TELEPORT_DIR/.lock" 2>/dev/null || true
+    mkdir "$TELEPORT_DIR/.lock" 2>/dev/null && return 0
+  fi
+  return 1
+}
+teleport_unlock() { rmdir "$TELEPORT_DIR/.lock" 2>/dev/null || true; }
+
+# Empty the Taildrop inbox. `tailscale file get` cannot filter, so anything
+# that is not a teleport file was an ordinary transfer: it goes to ~/Downloads.
+teleport_drain() {
+  local in="$TELEPORT_DIR/incoming" f err
+  mkdir -p "$in" "$TELEPORT_DIR/inbox" "$TELEPORT_DIR/acks"
+  if ! err="$(tailscale file get --conflict=rename "$in" 2>&1 >/dev/null)"; then
+    case "$err" in
+      *denied*|*permission*|*operator*)
+        teleport_log "cannot read the Taildrop inbox — fix once with: sudo tailscale set --operator=$(id -un)" ;;
+    esac
+    return 0
+  fi
+  for f in "$in"/*; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in
+      brain-teleport-ack-*.json) mv "$f" "$TELEPORT_DIR/acks/" ;;
+      brain-teleport-*.tgz)      mv "$f" "$TELEPORT_DIR/inbox/" ;;
+      *)
+        mkdir -p "$HOME/Downloads"
+        mv "$f" "$HOME/Downloads/"
+        teleport_log "moved Taildrop file '$(basename "$f")' to ~/Downloads"
+        ;;
+    esac
+  done
+}
+
+# github.com/owner/repo, whatever the URL spelling.
+teleport_norm_remote() {
+  printf '%s\n' "$1" | sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#:([^0-9])#/\1#; s#\.git$##; s#/+$##' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+teleport_self() { tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty'; }
+
+# teleport_pack SESSION_ID OUTDIR — writes OUTDIR/brain-teleport-<id>.tgz.
+teleport_pack() {
+  local id="$1" out="$2" transcript cwd root rel remote head branch tree wip="" tip ref work name
+  transcript="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$id.jsonl" 2>/dev/null | head -1)"
+  [ -n "$transcript" ] || die "no transcript for session $id under ~/.claude/projects"
+  # The directory the session was started in — `claude --resume` looks the
+  # conversation up by it.
+  cwd="$(jq -r 'select(.cwd != null) | .cwd' "$transcript" | head -1)"
+  [ -d "$cwd" ] || die "the session's directory is gone: $cwd"
+  root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "$cwd is not in a git repo — teleport carries the code with the session"
+  root="$(cd -P "$root" && pwd)"; cwd="$(cd -P "$cwd" && pwd)"
+  rel="${cwd#"$root"}"
+  remote="$(git -C "$root" remote get-url origin 2>/dev/null)" \
+    || die "$root has no origin remote for the other machine to clone"
+  head="$(git -C "$root" rev-parse HEAD)"
+  branch="$(git -C "$root" symbolic-ref --short -q HEAD || true)"
+
+  work="$(mktemp -d)"
+  mkdir -p "$work/pkg"
+  GIT_INDEX_FILE="$work/index" git -C "$root" read-tree HEAD
+  GIT_INDEX_FILE="$work/index" git -C "$root" add -A
+  tree="$(GIT_INDEX_FILE="$work/index" git -C "$root" write-tree)"
+  if [ "$tree" != "$(git -C "$root" rev-parse 'HEAD^{tree}')" ]; then
+    wip="$(git -C "$root" commit-tree "$tree" -p HEAD -m "brain teleport: uncommitted changes")"
+  fi
+  tip="${wip:-$head}"
+  ref="refs/brain-teleport/$id"
+  git -C "$root" update-ref "$ref" "$tip"
+  # Only what the remote does not already have; nothing at all when the tree
+  # is clean and pushed (git refuses an empty bundle).
+  if [ "$(git -C "$root" rev-list --count "$tip" --not --remotes)" -gt 0 ]; then
+    git -C "$root" bundle create "$work/pkg/repo.bundle" "$ref" --not --remotes >/dev/null 2>&1
+  fi
+  git -C "$root" update-ref -d "$ref"
+
+  cp "$transcript" "$work/pkg/transcript.jsonl"
+  [ -d "${transcript%.jsonl}" ] && cp -R "${transcript%.jsonl}" "$work/pkg/session-dir"
+  name="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .name // empty' "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1 || true)"
+  jq -n --arg id "$id" --arg from "$(teleport_self)" --arg remote "$remote" \
+    --arg head "$head" --arg wip "$wip" --arg branch "$branch" --arg root "$root" \
+    --arg rel "$rel" --arg name "${name:-$(basename "$root")}" \
+    '{v: 1, id: $id, from: $from, remote: $remote, head: $head, wip: $wip,
+      branch: $branch, root: $root, rel: $rel, name: $name}' > "$work/pkg/manifest.json"
+  tar czf "$out/brain-teleport-$id.tgz" -C "$work/pkg" .
+  rm -rf "$work"
+}
+
+# A local clone of REMOTE: the workspace or any ~/repos/* with the same origin.
+teleport_find_repo() {
+  local want d
+  want="$(teleport_norm_remote "$1")"
+  for d in "$(workspace_dir)" "$REPOS_DIR"/*; do
+    [ -d "$d/.git" ] || [ -f "$d/.git" ] || continue
+    [ "$(teleport_norm_remote "$(git -C "$d" remote get-url origin 2>/dev/null || true)")" = "$want" ] \
+      && { printf '%s\n' "$d"; return 0; }
+  done
+  return 1
+}
+
+# teleport_land PKG — rebuild the session described by PKG and start it.
+# Prints the new claude.ai link (empty if it did not show up in time).
+teleport_land() {
+  local pkg="$1" x m id remote head wip branch root rel sname repo short wt cwd slug from i bridge url=""
+  x="$(mktemp -d)"
+  tar xzf "$pkg" -C "$x"
+  m="$x/manifest.json"
+  id="$(jq -r .id "$m")"; remote="$(jq -r .remote "$m")"; head="$(jq -r .head "$m")"
+  wip="$(jq -r .wip "$m")"; branch="$(jq -r .branch "$m")"; root="$(jq -r .root "$m")"
+  rel="$(jq -r .rel "$m")"; sname="$(jq -r .name "$m")"; from="$(jq -r .from "$m")"
+  case "$id" in *[!A-Za-z0-9-]*|"") die "bad session id in $pkg" ;; esac
+
+  if ! repo="$(teleport_find_repo "$remote")"; then
+    repo="$REPOS_DIR/$(basename "${remote%.git}")"
+    [ ! -e "$repo" ] || die "$repo exists but is not a clone of $remote"
+    mkdir -p "$REPOS_DIR"
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+      gh repo clone "$remote" "$repo" -- -q >/dev/null 2>&1
+    else
+      git clone -q "$remote" "$repo"
+    fi
+  fi
+  git -C "$repo" fetch -q origin || true  # the bundle's prerequisites
+  [ -f "$x/repo.bundle" ] \
+    && git -C "$repo" fetch -q "$x/repo.bundle" "refs/brain-teleport/$id:refs/brain-teleport/$id"
+
+  short="${id:0:8}"
+  wt="$REPOS_DIR/.teleport/$(basename "$repo")-$short"
+  mkdir -p "$REPOS_DIR/.teleport"
+  # Take the branch name only if this machine has no branch by that name —
+  # never move or check out someone's existing local branch.
+  if [ -n "$branch" ] && ! git -C "$repo" show-ref --verify -q "refs/heads/$branch"; then
+    git -C "$repo" worktree add -q -b "$branch" "$wt" "$head"
+  else
+    git -C "$repo" worktree add -q --detach "$wt" "$head"
+  fi
+  # Uncommitted work comes back uncommitted (diff+apply also replays deletions
+  # and leaves new files untracked).
+  if [ -n "$wip" ]; then
+    git -C "$wt" diff --binary "$head" "$wip" | git -C "$wt" apply --binary
+  fi
+  git -C "$repo" update-ref -d "refs/brain-teleport/$id" 2>/dev/null || true
+
+  wt="$(cd -P "$wt" && pwd)"
+  cwd="$wt$rel"
+  mkdir -p "$cwd"
+  # Same conversation, new home: Claude finds it by the directory's slug.
+  slug="$(printf '%s' "$cwd" | sed 's|[^A-Za-z0-9]|-|g')"
+  mkdir -p "$HOME/.claude/projects/$slug"
+  jq -c --arg o "$root" --arg n "$wt" \
+    'if (.cwd | type) == "string" and (.cwd | startswith($o)) then .cwd = $n + (.cwd | ltrimstr($o)) else . end' \
+    "$x/transcript.jsonl" > "$HOME/.claude/projects/$slug/$id.jsonl"
+  [ -d "$x/session-dir" ] && cp -R "$x/session-dir" "$HOME/.claude/projects/$slug/$id"
+  seed_trust "$cwd"
+
+  tmux new-session -d -s "brain-teleport-$short" \
+    "cd '$cwd' && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
+     $(claude_bin) --resume '$id' --remote-control '$sname'"
+  for i in $(seq "$TELEPORT_WAIT"); do
+    bridge="$(jq -r --arg id "$id" 'select(.sessionId == $id) | .bridgeSessionId // empty' \
+      "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1 || true)"
+    [ -n "$bridge" ] && { url="https://claude.ai/code/$bridge"; break; }
+    sleep 1
+  done
+  teleport_log "landed $id from ${from:-?} in $cwd${url:+ — $url}"
+
+  if [ -n "$from" ] && command -v tailscale >/dev/null 2>&1; then
+    jq -n --arg id "$id" --arg host "$(teleport_self)" --arg url "$url" --arg dir "$cwd" \
+      '{id: $id, host: $host, url: $url, dir: $dir}' > "$x/brain-teleport-ack-$id.json"
+    tailscale file cp "$x/brain-teleport-ack-$id.json" "$from:" >/dev/null 2>&1 \
+      || teleport_log "could not send the receipt for $id back to $from"
+  fi
+  rm -rf "$x"
+  printf '%s\n' "$url"
+}
+
+# Watchdog hook: land every package waiting in the inbox.
+teleport_receive() {
+  command -v tailscale >/dev/null 2>&1 || return 0
+  teleport_lock || return 0
+  teleport_drain
+  local pkg rc
+  mkdir -p "$TELEPORT_DIR/done" "$TELEPORT_DIR/failed"
+  for pkg in "$TELEPORT_DIR/inbox"/*.tgz; do
+    [ -f "$pkg" ] || continue
+    set +e
+    ( set -e; teleport_land "$pkg" >/dev/null )
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      mv "$pkg" "$TELEPORT_DIR/done/"
+    else
+      mv "$pkg" "$TELEPORT_DIR/failed/"
+      teleport_log "could not land $(basename "$pkg") (kept in $TELEPORT_DIR/failed)"
+    fi
+  done
+  teleport_unlock
+}
+
+# Runs detached after a send: wait for the receipt, then end the original.
+teleport_await() {
+  local id="$1" pid="$2" i ack url
+  for i in $(seq 60); do
+    ack="$(find "$TELEPORT_DIR/acks" -name "brain-teleport-ack-$id*.json" 2>/dev/null | head -1)"
+    if [ -n "$ack" ]; then
+      url="$(jq -r '.url // empty' "$ack")"
+      teleport_log "$id confirmed on $(jq -r .host "$ack")${url:+ — $url}; ending the original session"
+      kill -TERM "$pid" 2>/dev/null || true
+      return 0
+    fi
+    if teleport_lock; then teleport_drain; teleport_unlock; fi
+    sleep 10
+  done
+  teleport_log "no receipt for $id after 10 minutes — the original session was left running"
+}
+
+cmd_teleport() {
+  local host="${1:-}" id
+  case "$host" in
+    ""|-h|--help)
+      die "usage: brain teleport <machine> [session-id]   (machines: tailscale file cp --targets)" ;;
+    _pack)  teleport_pack "$2" "$3"; return ;;
+    _land)  teleport_land "$2"; return ;;
+    _await) teleport_await "$2" "$3"; return ;;
+    log)    tail -n 20 "$TELEPORT_DIR/log" 2>/dev/null || info "nothing teleported yet"; return ;;
+  esac
+  id="${2:-${CLAUDE_CODE_SESSION_ID:-}}"
+  [ -n "$id" ] || die "no session to teleport: run this inside a Claude session, or pass a session id"
+  need tailscale jq git tar
+  tailscale file cp --targets 2>/dev/null | awk '{print $2}' | grep -qxF "$host" \
+    || die "$host is not a Taildrop target here (see: tailscale file cp --targets)"
+
+  local out
+  out="$(mktemp -d)"
+  teleport_pack "$id" "$out"
+  tailscale file cp "$out/brain-teleport-$id.tgz" "$host:" || die "Taildrop to $host failed"
+  rm -rf "$out"
+  teleport_log "sent $id to $host"
+  ok "sent to $host — it lands within a minute and appears on claude.ai under $host"
+
+  # Inside the session being teleported: end it once the target confirms.
+  if [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] && [ -n "${CLAUDE_PID:-}" ]; then
+    nohup "$0" teleport _await "$id" "$CLAUDE_PID" >/dev/null 2>&1 &
+    info "this session ends once $host confirms (up to 10 minutes; else it stays open)"
+  fi
 }
 
 # ------------------------------------------------------------- multi session
@@ -1370,6 +1654,7 @@ case "${1:-rc}" in
   expose)    shift; cmd_expose "$@" ;;
   autostart) shift; cmd_autostart "$@" ;;
   watchdog)  cmd_watchdog ;;
+  teleport)  shift; cmd_teleport "$@" ;;
   keepawake) shift; cmd_keepawake "$@" ;;
   repo)      shift; cmd_repo "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
@@ -1382,6 +1667,6 @@ case "${1:-rc}" in
   config)    shift; cmd_config "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
-  help|-h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)         die "unknown command: $1 (try: brain help)" ;;
 esac
