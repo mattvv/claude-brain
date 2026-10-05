@@ -314,6 +314,35 @@ kill "$P2" 2>/dev/null
 check "receipts are consumed" '[ -z "$(ls "$AK")" ]'
 check "the package carries the send's token" 'tar xzf "$PKG" -O ./manifest.json | jq -e "has(\"nonce\")" >/dev/null'
 
+echo "== round trips and closing the original =="
+# Teleported back: the session already sits in "<dir>-<id8>" — no second suffix.
+HID=99999999-0000-1111-2222-333333333333
+HOP="$SRC/repos/.teleport/navigate-99999999"; mkdir -p "$HOP"
+HSLUG="$(printf '%s' "$HOP" | sed 's|[^A-Za-z0-9]|-|g')"
+mkdir -p "$SRC/.claude/projects/$HSLUG"
+printf '{"type":"user","cwd":"%s","message":"back again"}\n' "$HOP" > "$SRC/.claude/projects/$HSLUG/$HID.jsonl"
+OUTH="$TMP/outh"; mkdir -p "$OUTH"
+HOME="$SRC" "${BASH:-bash}" "$BRAIN" teleport _pack "$HID" "$OUTH" >/dev/null 2>&1
+DH="$TMP/dsth"
+HOME="$DH" BRAIN_TELEPORT_WAIT=1 "${BASH:-bash}" "$BRAIN" teleport _land "$OUTH/brain-teleport-$HID.tgz" >/dev/null 2>&1
+check "a round trip keeps one id suffix on the folder" \
+  '[ -d "$DH/repos/.teleport/navigate-99999999" ] && [ ! -e "$DH/repos/.teleport/navigate-99999999-99999999" ]'
+
+# The waiter ends the original once the receipt (with this send's nonce) is in.
+DA="$TMP/dsta"; mkdir -p "$DA/.local/state/brain/teleport/acks"
+sleep 300 & ORIG=$!
+echo '{"id":"x","host":"far","status":"ok","nonce":"n1"}' > "$DA/.local/state/brain/teleport/acks/brain-teleport-ack-x.json"
+HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await x "$ORIG" n1 >/dev/null 2>&1
+check "the original session is ended, and the log says so" \
+  '! kill -0 "$ORIG" 2>/dev/null && grep -q "original session (pid $ORIG) ended" "$DA/.local/state/brain/teleport/log"'
+bash -c 'trap "" TERM; while :; do sleep 1; done' & STUBBORN=$!
+echo '{"id":"y","host":"far","status":"ok","nonce":"n2"}' > "$DA/.local/state/brain/teleport/acks/brain-teleport-ack-y.json"
+HOME="$DA" "${BASH:-bash}" "$BRAIN" teleport _await y "$STUBBORN" n2 >/dev/null 2>&1
+sleep 1
+check "one that ignores SIGTERM is killed, and the log says so" \
+  '! kill -0 "$STUBBORN" 2>/dev/null && grep -q "pid $STUBBORN) ignored SIGTERM" "$DA/.local/state/brain/teleport/log"'
+kill -9 "$ORIG" "$STUBBORN" 2>/dev/null; wait 2>/dev/null
+
 echo "== receive (the watchdog's half) =="
 DST3="$TMP/dst3"; mkdir -p "$DST3/inbox-src"
 git clone -q "$ORIGIN" "$DST3/repos/proj" 2>/dev/null
