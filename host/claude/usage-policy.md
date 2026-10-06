@@ -10,8 +10,23 @@ binding, when it resets, and which consultant vendors are linked and able to tak
 
 Anthropic and ChatGPT both report genuine headroom, so quote those figures freely. Grok and
 Kimi expose no usage endpoint and are shown as *linked, headroom not measurable* — never
-invent a number for them. A consultant vendor that is itself at its reserve stops being
-offered as a destination, so check `brain usage` before assuming ChatGPT has room.
+invent a number for them. Under `reserve`, a consultant vendor at its own reserve stops
+being offered; `claude-first` can use ChatGPT down to zero subscription headroom. Check
+`brain usage` before assuming ChatGPT has room.
+
+## Strategies
+
+- `reserve` (default) uses the advisory band and preserves the Claude reserve below.
+- `claude-first` prefers Claude without advisory nagging above its reserve.
+  At the reserve, or on extra-usage credits, route implementation, review and bulk
+  reading to brain-sol / brain-luna / brain-astra / brain-terra while ChatGPT has
+  subscription headroom. Once both subscriptions are spent, prefer Claude credits.
+  `routing credits allow` instead restores reserve behavior at that point.
+- `consultant-first` advises offloading whenever a consultant lane is available,
+  while retaining the reserve block and its safety valves.
+
+The strategy takes precedence over the reserve-only guidance below; unknown usage
+fails open. `brain usage` reports the effective account policy and current tier.
 
 **As headroom falls, move work off Anthropic rather than slowing down.** The order of
 preference in the routing table still applies; what changes is how much you do in-session:

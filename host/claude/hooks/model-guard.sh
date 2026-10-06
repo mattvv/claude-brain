@@ -70,15 +70,20 @@ VERDICT="$(usage_gate "$AGENT" 2>/dev/null)" || exit 0
 MODE="$(printf '%s\n' "$VERDICT" | head -1)"
 MSG="$(printf '%s\n' "$VERDICT" | tail -n +2)"
 
+case "$MODE" in deny|advise) ADVICE_KEY="$MODE:$(routing_strategy):$(routing_tier):$(usage_state)" ;; esac
 case "$MODE" in
   deny)
-    printf '%s\n' "$MSG" >&2
+    if usage_advice_due "$ADVICE_KEY" 2>/dev/null; then
+      printf '%s\n' "$MSG" >&2
+    else
+      printf "Blocked: Anthropic-backed delegation is still reserved for this session. Use a linked consultant; 'brain usage override 30' lifts the block.\n" >&2
+    fi
     exit 2
     ;;
   advise)
     # Allow, but put the live numbers in front of the model at the exact moment
     # it is choosing where to send work. Rate-limited so it cannot spam context.
-    if usage_advice_due "$(usage_state)" 2>/dev/null; then
+    if usage_advice_due "$ADVICE_KEY" 2>/dev/null; then
       jq -nc --arg ctx "$MSG" \
         '{hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:$ctx}}'
     fi

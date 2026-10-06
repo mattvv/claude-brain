@@ -85,8 +85,18 @@ remove_block() {
 install_routing() {
   install_block "$1" routing
   install_ops_block
-  install_block "$BRAIN_REPO_DIR/host/claude/usage-policy.md" usage
+  install_usage_block
   install_consult_block
+}
+
+install_usage_block() {
+  local tmp
+  tmp="$(mktemp)"
+  cat "$BRAIN_REPO_DIR/host/claude/usage-policy.md" > "$tmp"
+  printf "\nThis account's routing strategy: %s, credits %s.\n" \
+    "$(routing_strategy)" "$(routing_credits)" >> "$tmp"
+  install_block "$tmp" usage
+  rm -f "$tmp"
 }
 
 # The ops instructions differ by machine, not by taste: on a droplet the brain
@@ -1826,10 +1836,20 @@ cmd_usage() {
     msg="headroom $(usage_field headroom)% · resets in $reset_h"
     case "$st" in
       ok)       ok       "$msg" ;;
-      tight)    warn     "$msg — prefer consultants for heavy work" ;;
-      critical) fail     "$msg — at or below the ${C_BOLD}$(usage_reserve_pct)%${C_RESET} reserve; Anthropic-backed subagents are blocked" ;;
+      tight)    if [ "$(routing_strategy)" = claude-first ]; then ok "$msg"; else warn "$msg — prefer consultants for heavy work"; fi ;;
+      critical)
+        if [ "$(routing_strategy)" = claude-first ]; then
+          warn "$msg — $(routing_tier) routing (see policy)"
+        else
+          fail "$msg — at or below the ${C_BOLD}$(usage_reserve_pct)%${C_RESET} reserve; Anthropic-backed subagents are blocked"
+        fi
+        ;;
     esac
   fi
+  case "$(usage_field extra 2>/dev/null || true)" in
+    1) printf '  extra usage: enabled\n' ;;
+    0) printf '  extra usage: disabled\n' ;;
+  esac
 
   printf '\n%s\n' "${C_BOLD}consultant vendors${C_RESET}"
   local v until cx cs
@@ -1837,6 +1857,11 @@ cmd_usage() {
     if ! vendor_linked "$v"; then
       printf '  %-10s %s\n' "$v" "not linked — brain auth $v"
       continue
+    fi
+    if [ "$v" = chatgpt ]; then
+      case "$(usage_codex_field credits 2>/dev/null || true)" in
+        yes|no) printf '  %-10s credits: %s\n' "$v" "$(usage_codex_field credits)" ;;
+      esac
     fi
     if until="$(vendor_cooldown "$v" | awk '{print $2}')" && [ -n "$until" ]; then
       printf '  %-10s %s\n' "$v" "in cooldown until $(epoch_to_hm "$until")"
@@ -1847,7 +1872,7 @@ cmd_usage() {
       printf '  %-10s headroom %s%% (weekly %s%% used, secondary %s%%) · plan %s%s\n' \
         "$v" "$cx" "$(usage_codex_field primary)" "$(usage_codex_field secondary)" \
         "$(usage_codex_field plan)" \
-        "$([ "$cs" = "critical" ] && printf ' %s' "${C_BOLD}← at reserve${C_RESET}")"
+        "$([ "$cs" = "critical" ] && [ "$(routing_strategy)" != claude-first ] && printf ' %s' "${C_BOLD}← at reserve${C_RESET}")"
     elif [ "$v" = "chatgpt" ] && ! usage_probe_enabled; then
       printf '  %-10s %s\n' "$v" "linked · headroom unread (probe off)"
     else
@@ -1859,8 +1884,27 @@ cmd_usage() {
   printf '  enforce=%s  reserve=%s%%  advisory-at=%s%%  ttl=%ss  probe=%s (max every %ss, ~21 tok)\n' \
     "$(usage_enforce)" "$(usage_reserve_pct)" "$(usage_advisory_pct)" "$(usage_ttl)" \
     "$(setting_get USAGE_PROBE on)" "$(usage_probe_ttl)"
+  printf '  routing=%s credits=%s\n' "$(routing_strategy)" "$(routing_credits)"
+  local tier; tier="$(routing_tier)"
+  case "$tier" in
+    claude-sub) printf '  tier: claude-sub — Claude subscription preferred (unknown usage fails open)\n' ;;
+    chatgpt-sub)
+      local why="Claude subscription at/near cap"
+      [ "$(usage_field on_credits 2>/dev/null || echo 0)" = 1 ] && why="Claude subscription spent (on credits)"
+      printf '  tier: chatgpt-sub — %s, using ChatGPT subscription (%s%% left)\n' \
+        "$why" "$(usage_codex_field headroom)"
+      ;;
+    credits)
+      if [ "$(routing_credits)" = last ]; then
+        printf '  tier: credits — both subscriptions spent/at reserve; Claude credits preferred\n'
+      else
+        printf '  tier: credits — both subscriptions spent/at reserve; reserve policy applies (credits allowed)\n'
+      fi
+      ;;
+  esac
   usage_override_active && warn "override active — the reserve block is lifted"
   printf '  change with: brain config usage <advisory|block|off> | reserve <pct>\n'
+  printf '               brain config routing <reserve|claude-first|consultant-first> | credits <last|allow>\n'
 }
 
 # anyone tailing by hand, so all three report identical state.
@@ -1894,6 +1938,19 @@ cmd_consult() {
   esac
 }
 
+# Only routing/usage keys support explicit account-local writes.
+config_setting_set() {
+  case "$1" in
+    ROUTING_*|USAGE_*)
+      if [ -n "${BRAIN_ACCOUNT_FLAG:-}" ]; then
+        setting_set_account "$@"
+        return
+      fi
+      ;;
+  esac
+  setting_set "$@"
+}
+
 cmd_config() {
   local key="${1:-}" val="${2:-}" val2="${3:-}"
   case "$key" in
@@ -1909,7 +1966,35 @@ cmd_config() {
         "$(setting_get USAGE_PROBE on)"
       printf '               (brain config usage <advisory|block|off> | reserve <pct>\n'
       printf '                | advisory-at <pct> | ttl <secs> | probe <on|off>)\n'
+      printf '  routing    = %s   credits %s   (brain config routing <reserve|claude-first|consultant-first>)\n' \
+        "$(routing_strategy)" "$(routing_credits)"
       printf '  autoupdate = %s   (brain config autoupdate <on|off>)\n' "$(setting_get AUTOUPDATE off)"
+      local k
+      for k in ROUTING_STRATEGY ROUTING_CREDITS USAGE_ENFORCE USAGE_RESERVE_PCT \
+               USAGE_ADVISORY_PCT USAGE_TTL USAGE_PROBE USAGE_PROBE_TTL; do
+        if setting_account_override "$k"; then
+          printf '  %s = %s (%s override)\n' "$k" "$(setting_get "$k" '')" "$BRAIN_ACCOUNT"
+        fi
+      done
+      ;;
+    routing)
+      case "$val" in
+        '') printf 'routing=%s credits=%s\n' "$(routing_strategy)" "$(routing_credits)" ;;
+        reserve|claude-first|consultant-first)
+          config_setting_set ROUTING_STRATEGY "$val"
+          ;;
+        credits)
+          case "$val2" in
+            last|allow) config_setting_set ROUTING_CREDITS "$val2" ;;
+            *) die "usage: brain config routing credits <last|allow>" ;;
+          esac
+          ;;
+        *) die "usage: brain config routing <reserve|claude-first|consultant-first> | credits <last|allow>" ;;
+      esac
+      if [ -n "$val" ]; then
+        [ ! -f "$BRAIN_CLAUDE_DIR/CLAUDE.md" ] || install_usage_block
+        ok "routing=$(routing_strategy) credits=$(routing_credits)$(account_flag)"
+      fi
       ;;
     autoupdate)
       case "$val" in
@@ -1928,7 +2013,7 @@ cmd_config() {
           printf '%s\n' "$(usage_enforce)"
           ;;
         advisory|block|off)
-          setting_set USAGE_ENFORCE "$val"
+          config_setting_set USAGE_ENFORCE "$val"
           case "$val" in
             block)    ok "Anthropic-backed subagents are blocked below the $(usage_reserve_pct)% reserve" ;;
             advisory) ok "low headroom is surfaced to the brain, but nothing is blocked" ;;
@@ -1938,16 +2023,16 @@ cmd_config() {
         probe)
           case "$val2" in
             '')     printf '%s\n' "$(setting_get USAGE_PROBE on)" ;;
-            on)     setting_set USAGE_PROBE on
+            on)     config_setting_set USAGE_PROBE on
                     ok "ChatGPT headroom will be read (~21 tokens per probe)" ;;
-            off)    setting_set USAGE_PROBE off
+            off)    config_setting_set USAGE_PROBE off
                     ok "ChatGPT headroom will not be read (no tokens spent)" ;;
             *)      die "usage: brain config usage probe <on|off>" ;;
           esac
           ;;
         probe-ttl)
           case "$val2" in ''|*[!0-9]*) die "usage: brain config usage probe-ttl <seconds>" ;; esac
-          setting_set USAGE_PROBE_TTL "$val2"
+          config_setting_set USAGE_PROBE_TTL "$val2"
           ok "ChatGPT headroom probed at most every $(usage_probe_ttl)s"
           ;;
         reserve|advisory-at|ttl)
@@ -1955,12 +2040,12 @@ cmd_config() {
           case "$val" in
             reserve)
               [ "$val2" -le 90 ] || die "reserve must be 0-90 (a huge reserve blocks everything)"
-              setting_set USAGE_RESERVE_PCT "$val2"
+              config_setting_set USAGE_RESERVE_PCT "$val2"
               [ "$val2" -eq 0 ] && ok "reserve disabled — nothing will be blocked on usage" \
                                 || ok "keeping $val2% of the Claude subscription in reserve"
               ;;
-            advisory-at) setting_set USAGE_ADVISORY_PCT "$val2"; ok "advisory below $val2% headroom" ;;
-            ttl)         setting_set USAGE_TTL "$val2";          ok "usage cache TTL now $(usage_ttl)s" ;;
+            advisory-at) config_setting_set USAGE_ADVISORY_PCT "$val2"; ok "advisory below $val2% headroom" ;;
+            ttl)         config_setting_set USAGE_TTL "$val2";          ok "usage cache TTL now $(usage_ttl)s" ;;
           esac
           ;;
         *)
@@ -2019,7 +2104,7 @@ cmd_config() {
       esac
       ;;
     *)
-      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>|usage ...]"
+      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>|usage ...|routing ...] [--account NAME]"
       ;;
   esac
 }

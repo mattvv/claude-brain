@@ -85,6 +85,7 @@ else
   BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-0}"
   BRAIN_ACCOUNT_TAG="-$BRAIN_ACCOUNT"
 fi
+BRAIN_ACCOUNT_SETTINGS_FILE="$BRAIN_ACCOUNT_DIR/settings"
 export BRAIN_TOKEN_FILE="$BRAIN_ACCOUNT_DIR/token"
 BRAIN_PROXY_CONFIG="$BRAIN_ACCOUNT_DIR/proxy-config.yaml"
 BRAIN_PROXY_URL="http://127.0.0.1:$BRAIN_PROXY_PORT"
@@ -186,10 +187,25 @@ need() {
   [ ${#missing[@]} -eq 0 ] || die "missing required commands: ${missing[*]}"
 }
 
+# The default account, including same-file aliases, has no separate overlay.
+setting_account_overlay() {
+  [ "$BRAIN_ACCOUNT_SETTINGS_FILE" != "$BRAIN_SETTINGS_FILE" ] \
+    && ! [ "$BRAIN_ACCOUNT_SETTINGS_FILE" -ef "$BRAIN_SETTINGS_FILE" ]
+}
+
+setting_account_override() {
+  setting_account_overlay && [ -f "$BRAIN_ACCOUNT_SETTINGS_FILE" ] \
+    && grep -q "^$1=" "$BRAIN_ACCOUNT_SETTINGS_FILE"
+}
+
 # Read a KEY=VALUE user setting, falling back to a default: setting_get KEY DEFAULT
 setting_get() {
   local val=""
-  [ -f "$BRAIN_SETTINGS_FILE" ] && val="$(sed -n "s/^$1=//p" "$BRAIN_SETTINGS_FILE" | tail -1)"
+  if setting_account_override "$1"; then
+    val="$(sed -n "s/^$1=//p" "$BRAIN_ACCOUNT_SETTINGS_FILE" | tail -1)"
+  else
+    [ -f "$BRAIN_SETTINGS_FILE" ] && val="$(sed -n "s/^$1=//p" "$BRAIN_SETTINGS_FILE" | tail -1)"
+  fi
   printf '%s\n' "${val:-$2}"
 }
 
@@ -201,6 +217,20 @@ setting_set() {
   { grep -v "^$1=" "$BRAIN_SETTINGS_FILE" || true; printf '%s=%s\n' "$1" "$2"; } \
     > "$BRAIN_SETTINGS_FILE.tmp"
   mv "$BRAIN_SETTINGS_FILE.tmp" "$BRAIN_SETTINGS_FILE"
+}
+
+# Write an account override, or the global file when both files are the same.
+setting_set_account() {
+  if ! setting_account_overlay; then
+    setting_set "$@"
+    return
+  fi
+  ensure_brain_dirs
+  umask 077
+  touch "$BRAIN_ACCOUNT_SETTINGS_FILE"
+  { grep -v "^$1=" "$BRAIN_ACCOUNT_SETTINGS_FILE" || true; printf '%s=%s\n' "$1" "$2"; } \
+    > "$BRAIN_ACCOUNT_SETTINGS_FILE.tmp"
+  mv "$BRAIN_ACCOUNT_SETTINGS_FILE.tmp" "$BRAIN_ACCOUNT_SETTINGS_FILE"
 }
 
 # Read a KEY=VALUE entry from the PIN file.
@@ -526,8 +556,9 @@ usage_refresh_vendors() {
       printf '%s unlinked\n' "$v" >> "$tmp"
     elif state="$(vendor_cooldown "$v")"; then
       printf '%s %s\n' "$v" "$state" >> "$tmp"
-    elif [ "$v" = "chatgpt" ] && [ "$(usage_codex_state)" = "critical" ]; then
-      # Measured, and out of room: same reserve rule as Claude.
+    elif [ "$v" = "chatgpt" ] && [ "$(usage_codex_state)" = "critical" ] \
+         && { [ "$(routing_strategy)" != claude-first ] || [ "$(routing_codex_subscription_state)" = spent ]; }; then
+      # Claude-first spends the remaining ChatGPT subscription before credits.
       printf '%s reserve\n' "$v" >> "$tmp"
     else
       printf '%s linked\n' "$v" >> "$tmp"
@@ -635,9 +666,16 @@ usage_refresh_anthropic() {
     return 1
   fi
 
-  local cap resets_raw resets_at resets_in
+  local cap extra on_credits headroom resets_raw resets_at resets_in
   cap="$(jq -r 'if ((.org_spend_cap_reached // false) or (.extra_usage.spend_limit_reached // false))
                 then 1 else 0 end' "$body_file" 2>/dev/null || echo 0)"
+  extra="$(jq -r 'if (.extra_usage.is_enabled // false) == true then 1 else 0 end' "$body_file" 2>/dev/null || echo 0)"
+  headroom="$(printf '%s' "$fields" \
+    | awk '{for(i=1;i<=NF;i++){split($i,p,"=");if(p[1]=="headroom"){print p[2];exit}}}')"
+  on_credits=0
+  if [ "$extra" = 1 ] && [ "$cap" = 0 ] && [ "$headroom" = 0 ]; then
+    on_credits=1
+  fi
   rm -f "$body_file"
   resets_raw="$(printf '%s' "$fields" | awk '{for(i=1;i<=NF;i++){split($i,p,"=");if(p[1]=="resets_raw"){print substr($i,12)}}}')"
   # jq's fromdateiso8601 rejects both fractional seconds and numeric offsets,
@@ -651,7 +689,8 @@ usage_refresh_anthropic() {
   fields="$(printf '%s' "$fields" | sed 's/resets_raw=[^ ]*//')"
 
   local tmp="$BRAIN_USAGE_SUMMARY.tmp.$$"
-  printf 'updated_at=%s %scap=%s resets_in=%s\n' "$now" "$fields" "$cap" "$resets_in" > "$tmp"
+  printf 'updated_at=%s %scap=%s extra=%s on_credits=%s resets_in=%s\n' \
+    "$now" "$fields" "$cap" "$extra" "$on_credits" "$resets_in" > "$tmp"
   mv "$tmp" "$BRAIN_USAGE_SUMMARY"
   rm -f "$BRAIN_USAGE_DIR/.last-error"
   printf '%s\n' "$now" > "$BRAIN_USAGE_STAMP"
@@ -727,6 +766,53 @@ usage_agent_is_anthropic() {
   esac
 }
 
+# Effective routing policy; malformed settings retain the legacy default.
+routing_strategy() {
+  local strategy; strategy="$(setting_get ROUTING_STRATEGY reserve)"
+  case "$strategy" in reserve|claude-first|consultant-first) ;; *) strategy=reserve ;; esac
+  printf '%s\n' "$strategy"
+}
+
+routing_credits() {
+  local credits; credits="$(setting_get ROUTING_CREDITS last)"
+  case "$credits" in last|allow) ;; *) credits=last ;; esac
+  printf '%s\n' "$credits"
+}
+
+# Subscription exhaustion is zero headroom, not the consultant reserve.
+# A cooldown overrides even missing measurements; unlinked/unknown fails open.
+routing_codex_subscription_state() {
+  vendor_linked chatgpt || { printf 'unknown\n'; return 0; }
+  if vendor_cooldown chatgpt >/dev/null 2>&1; then
+    printf 'spent\n'; return 0
+  fi
+  [ "$(usage_codex_state)" != unknown ] || { printf 'unknown\n'; return 0; }
+  local cx; cx="$(usage_codex_field headroom 2>/dev/null || true)"
+  # A garbled sample must not read as "spent" — that would push work to credits.
+  case "$cx" in ''|*[!0-9]*) printf 'unknown\n'; return 0 ;; esac
+  if [ "$cx" -gt 0 ]; then printf 'healthy\n'
+  else printf 'spent\n'
+  fi
+}
+
+# Read-time tier respects the Claude reserve; no uncertain sample causes a deny.
+routing_tier() {
+  local headroom
+  [ "$(usage_state)" != unknown ] || { printf 'claude-sub\n'; return 0; }
+  headroom="$(usage_field headroom 2>/dev/null || true)"
+  case "$headroom" in ''|*[!0-9]*) printf 'claude-sub\n'; return 0 ;; esac
+  if [ "$(usage_field cap 2>/dev/null || echo 0)" != 1 ] \
+     && [ "$(usage_field on_credits 2>/dev/null || echo 0)" != 1 ] \
+     && [ "$headroom" -gt "$(usage_reserve_pct)" ]; then
+    printf 'claude-sub\n'; return 0
+  fi
+  case "$(routing_codex_subscription_state)" in
+    healthy) printf 'chatgpt-sub\n' ;;
+    spent)   printf 'credits\n' ;;
+    *)       printf 'claude-sub\n' ;;
+  esac
+}
+
 # The routing decision for one Agent/Task dispatch.
 #
 # Prints "allow", or "advise" / "deny" followed by a message. Always exits 0 —
@@ -735,12 +821,31 @@ usage_agent_is_anthropic() {
 # subagents: the main thread has no PreToolUse event, so the session itself can
 # never be cut off, and that is what makes the reserve safe.
 usage_gate() {
-  local agent="$1" state lanes headroom bind resets
+  local agent="$1" state lanes headroom bind resets strategy tier claude_first=0
 
   [ "$(usage_enforce)" = "off" ] && { printf 'allow\n'; return 0; }
   usage_agent_is_anthropic "$agent" || { printf 'allow\n'; return 0; }
 
   state="$(usage_state)"
+  [ "$state" = unknown ] && { printf 'allow\n'; return 0; }
+  strategy="$(routing_strategy)"
+  if [ "$strategy" = claude-first ]; then
+    tier="$(routing_tier)"
+    case "$tier" in
+      claude-sub) printf 'allow\n'; return 0 ;;
+      chatgpt-sub) state=critical; claude_first=1 ;;
+      credits)
+        if [ "$(routing_credits)" = last ]; then
+          printf 'advise\n'
+          printf 'Both subscription caps are spent (or Claude is at its reserve); work is now billed to credits where enabled. Claude is preferred over OpenAI credits.\n'
+          return 0
+        fi
+        ;;
+    esac
+  elif [ "$strategy" = consultant-first ] && [ "$state" = ok ] \
+       && [ -n "$(usage_rank_lanes 2>/dev/null || true)" ]; then
+    state=tight
+  fi
   case "$state" in ok|unknown) printf 'allow\n'; return 0 ;; esac
 
   headroom="$(usage_field headroom 2>/dev/null || echo '?')"
@@ -755,6 +860,13 @@ usage_gate() {
   local cx
   if cx="$(usage_codex_field headroom 2>/dev/null)" && [ "$(usage_codex_state)" != "critical" ]; then
     alt="brain-astra / brain-sol / brain-terra / brain-luna (ChatGPT is at ${cx}% headroom), or brain-grok / brain-kimi"
+  fi
+
+  if [ "$claude_first" = 1 ]; then
+    where="Claude is at/near cap (${headroom}% headroom); ChatGPT subscription has ${cx}% headroom"
+    [ "$(usage_field on_credits 2>/dev/null || echo 0)" = 1 ] && where="Claude is now on extra-usage credits; ChatGPT subscription has ${cx}% headroom"
+    alt="brain-sol / brain-luna / brain-astra / brain-terra for implementation, review and bulk reading"
+    lanes=chatgpt
   fi
 
   if [ "$state" = "tight" ]; then
@@ -784,6 +896,11 @@ usage_gate() {
   fi
 
   printf 'deny\n'
+  if [ "$claude_first" = 1 ]; then
+    printf "Blocked: %s. Delegate to %s.\nIf needed, run 'brain usage override 30' or 'brain config usage advisory'.\n" \
+      "$where" "$alt"
+    return 0
+  fi
   printf "Blocked to preserve the Claude reserve: %s, which is at or below the %s%% reserve. '%s' would spend that reserve, and the reserve is what keeps this session able to answer.\nDo the work inline, or delegate to a consultant with headroom (linked: %s) — %s.\nIf you truly need it, tell the user they can run 'brain usage override 30' or 'brain config usage reserve 0'.\n" \
     "$where" "$(usage_reserve_pct)" "$agent" "$lanes" "$alt"
   return 0
@@ -795,7 +912,7 @@ usage_gate() {
 BRAIN_USAGE_ADVICE_FLOOR=600
 usage_advice_due() {
   local state="$1" f="$BRAIN_USAGE_DIR/.last-advice" prev_state prev_at now
-  case "$state" in tight|critical) ;; *) return 1 ;; esac
+  case "$state" in tight|critical|advise:*|deny:*) ;; *) return 1 ;; esac
   now="$(date +%s)"
   if [ -f "$f" ]; then
     read -r prev_state prev_at < "$f" || true
