@@ -205,6 +205,15 @@ decision function shared by the CLI, the hooks, and the statusline:
   `BRAIN_USAGE_OVERRIDE=1`, or `brain config usage advisory|off`).
 - **Advice is rate-limited** to band transitions plus a ten-minute floor. It lands in the
   model's context; an unlimited version would burn the quota it protects.
+- **Per-account policy.** `$BRAIN_ACCOUNT_DIR/settings` overlays the global settings;
+  the default account uses the same file, read/written only once. Explicit `--account`
+  scopes `brain config routing ...` and `brain config usage ...` writes to the account.
+- **Strategies.** `reserve` preserves existing bands; `consultant-first` advises whenever
+  a lane is linked. `claude-first` suppresses the advisory band, uses ChatGPT subscription
+  headroom at the Claude reserve/on extra usage, and prefers Claude credits only after
+  both subscriptions are spent (`ROUTING_CREDITS=last`; `allow` restores reserve behavior).
+  `extra`/`on_credits` join Anthropic's cache; Codex subscription exhaustion is zero
+  headroom or cooldown, independent of purchased credits. Unknown samples fail open.
 
 Contract tests: `tests/usage/run.sh` (offline, fixture-driven, no creds), wired into CI.
 

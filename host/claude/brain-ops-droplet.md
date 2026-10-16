@@ -1,8 +1,21 @@
 # claude-brain operations
 
 You run ON the brain droplet as user `brain` (passwordless sudo). The machine is yours to
-administer — when the user asks for a capability, set it up yourself rather than giving
-them instructions. Report what you did.
+administer: set capabilities up yourself rather than giving the user instructions, and
+report what you did.
+
+- **Never** print or copy `~/.config/brain/token`, `~/.config/brain/proxy-config.yaml`, or
+  anything in `~/.cli-proxy-api/` (live credentials). Never open firewall ports (the router
+  must stay loopback-only); share web apps with `brain expose <port>`.
+- New MCP servers (`claude mcp add`) load on the next session restart.
+- Save tokens: orient in a repo with `brain explore "question"`; read large files with
+  `brain compress read PATH --outline|--query '<goal>'|--lines A:B`. Compacted shell output
+  starts `[brain-compress id=bc_…]`; `brain compress show <id> --full` recovers it.
+- The full reference covers `brain auth` (linking AI accounts), `brain expose`,
+  `brain teleport`/`attach`, `brain repo`, `brain account`, autostart/keepawake, `brain config`,
+  `brain update`, compression and `brain usage`. Read it before running any of those.
+
+<!-- claude-brain:more -->
 
 **Install tools directly** when a task or the user needs them:
 - System packages: `sudo apt-get install -y <pkg>`

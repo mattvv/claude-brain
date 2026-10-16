@@ -267,7 +267,7 @@ consultant vendors
   kimi       not linked — brain auth kimi
 ```
 
-What the brain does with that, automatically:
+Under the default `reserve` strategy, the brain does this automatically:
 
 - **Plenty left** — nothing changes.
 - **Running low** (below 35% headroom by default) — the brain is told the live number at the
@@ -283,6 +283,23 @@ brain config usage reserve 15            # how much Claude quota to keep back
 brain config usage probe off             # stop reading ChatGPT headroom (see below)
 brain usage override 30                  # spend the reserve anyway, for 30 minutes
 ```
+
+Routing defaults to `reserve` (the behavior above). `consultant-first` advises offloading
+whenever a consultant lane is available. For subscriptions before credits, with Claude
+preferred while it has room:
+
+```bash
+brain config routing claude-first --account work
+brain config routing credits last --account work
+brain config usage reserve 0 --account work  # optional: use Claude to its cap
+```
+
+`claude-first` skips the advisory band, moves work to the ChatGPT subscription at the
+Claude reserve or on extra-usage credits, then prefers Claude credits once both
+subscriptions are spent. `routing credits allow` restores reserve behavior at that point.
+Routing and usage settings written with `--account` override global settings for that
+account; without it, writes remain global. `brain config --account work` marks overrides,
+and `brain usage --account work` shows the effective policy, tier, and credit signals.
 
 **What is and isn't measured.**
 

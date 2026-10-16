@@ -1,5 +1,20 @@
 # claude-brain usage-aware routing
 
+`brain usage` shows real Claude headroom per window and which consultant vendors can take
+work. Anthropic and ChatGPT report genuine numbers; Grok and Kimi expose none, so never
+invent a figure for them.
+
+__ROUTING_STRATEGY__
+
+As Claude headroom falls, move implementation, review and bulk reading to `brain-*`
+consultants rather than slowing down. At the reserve the guard hook deliberately blocks
+Anthropic-backed subagents (`Explore`, `Plan`, `general-purpose`, `brain-fable`, …). Don't
+retry or work around a block: do the step inline or hand it to a consultant, tell the user,
+and mention `brain usage override <minutes>`. In the RC lane a `brain-*` agent is a bridge
+running on Claude, so offloading saves real tokens but not all of them; don't overclaim.
+
+<!-- claude-brain:more -->
+
 Your Claude subscription is metered in rolling windows (a ~5h session window, weekly
 windows, and sometimes a weekly window scoped to one model). The other vendors behind the
 `brain-*` consultants are separate subscriptions with separate limits — spending one does
@@ -10,8 +25,23 @@ binding, when it resets, and which consultant vendors are linked and able to tak
 
 Anthropic and ChatGPT both report genuine headroom, so quote those figures freely. Grok and
 Kimi expose no usage endpoint and are shown as *linked, headroom not measurable* — never
-invent a number for them. A consultant vendor that is itself at its reserve stops being
-offered as a destination, so check `brain usage` before assuming ChatGPT has room.
+invent a number for them. Under `reserve`, a consultant vendor at its own reserve stops
+being offered; `claude-first` can use ChatGPT down to zero subscription headroom. Check
+`brain usage` before assuming ChatGPT has room.
+
+## Strategies
+
+- `reserve` (default) uses the advisory band and preserves the Claude reserve below.
+- `claude-first` prefers Claude without advisory nagging above its reserve.
+  At the reserve, or on extra-usage credits, route implementation, review and bulk
+  reading to brain-sol / brain-luna / brain-astra / brain-terra while ChatGPT has
+  subscription headroom. Once both subscriptions are spent, prefer Claude credits.
+  `routing credits allow` instead restores reserve behavior at that point.
+- `consultant-first` advises offloading whenever a consultant lane is available,
+  while retaining the reserve block and its safety valves.
+
+The strategy takes precedence over the reserve-only guidance below; unknown usage
+fails open. `brain usage` reports the effective account policy and current tier.
 
 **As headroom falls, move work off Anthropic rather than slowing down.** The order of
 preference in the routing table still applies; what changes is how much you do in-session:

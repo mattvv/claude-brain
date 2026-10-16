@@ -1,13 +1,24 @@
 # claude-brain operations (this is someone's own computer)
 
-You run ON your owner's personal machine (`__HOSTDESC__`) as their user account — not on a
-disposable cloud VM. Everything you do here has consequences for a computer they use for
-other things. Be useful, but ask before changing the machine itself.
+You run ON your owner's personal machine (`__HOSTDESC__`) as their user account, not a
+disposable VM. Ask before changing the machine itself.
 
 __SCOPE_NOTE__
 
-**Sudo is not free here.** __SUDO_NOTE__ Never try to feed a password to `sudo`. If a
-step needs privileges you don't have, stop and tell the user the exact command to run.
+- **Sudo:** __SUDO_NOTE__ Never feed a password to `sudo`; give the user the exact command.
+- **Never** print or copy `~/.config/brain/token`, `~/.config/brain/proxy-config.yaml`, or
+  anything in `~/.cli-proxy-api/` (live credentials). Never open firewall ports or change
+  firewall rules; share web apps with `brain expose <port>`. Never delete or rewrite files
+  outside the work you were asked to do.
+- Ask before installing system packages (`__PKG_HINT__`); prefer user-scoped installs.
+- Save tokens: orient in a repo with `brain explore "question"`; read large files with
+  `brain compress read PATH --outline|--query '<goal>'|--lines A:B`. Compacted shell output
+  starts `[brain-compress id=bc_…]`; `brain compress show <id> --full` recovers it.
+- The full reference covers `brain auth` (linking AI accounts), `brain expose`,
+  `brain teleport`/`attach`, `brain repo`, `brain account`, autostart/keepawake, `brain config`,
+  `brain update`, compression and `brain usage`. Read it before running any of those.
+
+<!-- claude-brain:more -->
 
 **Installing tools**: ask first, then use this machine's package manager
 (`__PKG_HINT__`). Language-level installs that stay inside the user's home

@@ -17,7 +17,10 @@ export BRAIN_REPO_DIR="$ROOT"
 export BRAIN_STATE_DIR="$WORK/state"
 export BRAIN_CONFIG_DIR="$WORK/config"
 export BRAIN_AUTH_DIR="$WORK/auth"
-mkdir -p "$BRAIN_STATE_DIR" "$BRAIN_CONFIG_DIR" "$BRAIN_AUTH_DIR"
+export HOME="$WORK/home"
+export BRAIN_ACCOUNT=default
+unset BRAIN_ACCOUNT_FLAG
+mkdir -p "$BRAIN_STATE_DIR" "$BRAIN_CONFIG_DIR" "$BRAIN_AUTH_DIR" "$HOME"
 
 # shellcheck source=../../host/lib/common.sh
 . "$ROOT/host/lib/common.sh"
@@ -351,6 +354,106 @@ check "absurd reserve rejected"              '! "$ROOT/host/bin/brain" config us
 check "bad enforce mode rejected"            '! "$ROOT/host/bin/brain" config usage nonsense >/dev/null 2>&1'
 setting_set USAGE_RESERVE_PCT 15
 check "brain help lists usage"               '"$ROOT/host/bin/brain" help | grep -q "brain usage"'
+
+echo "== routing strategies and credits =="
+cat > "$FIX/flat-credits.json" <<'J'
+{"five_hour":{"utilization":100,"resets_at":"2030-01-01T00:00:00Z"},
+ "extra_usage":{"is_enabled":true}}
+J
+cat > "$FIX/flat-credits-capped.json" <<'J'
+{"five_hour":{"utilization":100,"resets_at":"2030-01-01T00:00:00Z"},
+ "extra_usage":{"is_enabled":true,"spend_limit_reached":true}}
+J
+cat > "$FIX/codex-spent.hdr" <<'H'
+HTTP/2 200
+x-codex-plan-type: prolite
+x-codex-primary-used-percent: 100
+x-codex-secondary-used-percent: 12
+x-codex-credits-has-credits: True
+H
+check "routing defaults to reserve"          '[ "$(routing_strategy)" = "reserve" ]'
+probe codex-ok.hdr; usage_refresh_vendors
+refresh limits-tight.json
+check "missing extra field defaults off"    '[ "$(usage_field extra)" = "0" ]'
+check "reserve advisory band unchanged"     '[ "$(gate Explore)" = "advise" ]'
+setting_set ROUTING_STRATEGY claude-first
+check "claude-first defaults credits last"  '[ "$(routing_credits)" = "last" ]'
+check "claude-first skips advisory band"     '[ "$(gate Explore)" = "allow" ]'
+fresh
+check "claude-first hook silent above reserve" '[ "$(hook Explore)" = "0" ] && [ ! -s "$WORK/hook.out" ]'
+refresh flat-critical.json
+check "Claude reserve uses ChatGPT tier"     '[ "$(routing_tier)" = "chatgpt-sub" ]'
+check "Claude reserve + ChatGPT room denies" '[ "$(gate Explore)" = "deny" ]'
+check "deny quotes ChatGPT subscription room" 'usage_gate Explore | grep -q "ChatGPT subscription has 98% headroom"'
+check "claude-first override still works"   '[ "$(BRAIN_USAGE_OVERRIDE=1 gate Explore)" = "advise" ]'
+check "claude-first advisory valve works"   'setting_set USAGE_ENFORCE advisory; [ "$(gate Explore)" = "advise" ]; setting_set USAGE_ENFORCE block'
+check "claude-first off stays silent"       'setting_set USAGE_ENFORCE off; [ "$(gate Explore)" = "allow" ]; setting_set USAGE_ENFORCE block'
+refresh flat-credits.json
+check "extra usage enabled is cached"       '[ "$(usage_field extra)" = "1" ]'
+check "binding cap derives on credits"      '[ "$(usage_field on_credits)" = "1" ]'
+check "credits + ChatGPT room deny mentions credits" 'usage_gate Explore | grep -q "now on extra-usage credits"'
+fresh
+check "on-credits hook denies"              '[ "$(hook Explore)" = "2" ]'
+check "on-credits hook explains credits"    'grep -q "now on extra-usage credits" "$WORK/hook.err"'
+check "repeated deny still blocks"          '[ "$(hook Explore)" = "2" ]'
+check "repeated deny rate-limits detail"    '! grep -q "ChatGPT subscription has" "$WORK/hook.err"'
+refresh flat-credits-capped.json
+check "spend cap is not usable credits"     '[ "$(usage_field cap)" = "1" ] && [ "$(usage_field on_credits)" = "0" ]'
+refresh flat-credits.json
+probe codex-secondary.hdr; usage_refresh_vendors
+check "positive ChatGPT headroom is still subscription" '[ "$(routing_tier)" = "chatgpt-sub" ]'
+check "claude-first keeps positive ChatGPT lane" 'usage_rank_lanes | grep -q chatgpt'
+probe codex-spent.hdr; usage_refresh_vendors
+check "spent Codex can still have credits"  '[ "$(usage_codex_field credits)" = "yes" ]'
+check "both subscriptions spent use credits tier" '[ "$(routing_tier)" = "credits" ]'
+check "both spent allow with credit advice" '[ "$(gate Explore)" = "advise" ]'
+fresh
+check "both spent hook allows with advice"  '[ "$(hook Explore)" = "0" ] && grep -q additionalContext "$WORK/hook.out"'
+check "both spent advice prefers Claude credits" 'grep -q "Claude is preferred over OpenAI credits" "$WORK/hook.out"'
+check "credit advice is rate-limited"       '[ "$(hook Explore)" = "0" ] && [ ! -s "$WORK/hook.out" ]'
+check "usage shows routing tier and credit signals" '"$ROOT/host/bin/brain" usage > "$WORK/usage.out" 2>/dev/null; grep -q "routing=claude-first credits=last" "$WORK/usage.out" && grep -q "tier: credits" "$WORK/usage.out" && grep -q "extra usage: enabled" "$WORK/usage.out" && grep -q "credits: yes" "$WORK/usage.out"'
+setting_set ROUTING_CREDITS allow
+link xai
+check "credits allow restores reserve deny" '[ "$(gate Explore)" = "deny" ]'
+setting_set ROUTING_CREDITS last
+cat > "$BRAIN_AUTH_DIR/codex-test.cds" <<'J'
+{"records":[{"status":"cooldown","quota":{"exceeded":true,"next_recover_at":"2030-01-01T00:00:00Z"}}]}
+J
+probe codex-ok.hdr; usage_refresh_vendors
+check "ChatGPT cooldown exhausts subscription" '[ "$(routing_tier)" = "credits" ]'
+rm -f "$BRAIN_AUTH_DIR/codex-test.cds"
+rm -f "$BRAIN_CODEX_STATE"
+check "unknown ChatGPT fails open"          '[ "$(routing_tier)" = "claude-sub" ] && [ "$(gate Explore)" = "allow" ]'
+probe codex-ok.hdr
+unlink_all
+check "unlinked ChatGPT fails open"         '[ "$(gate Explore)" = "allow" ]'
+link codex
+setting_set ROUTING_STRATEGY consultant-first
+refresh flat-ok.json
+check "consultant-first advises early"      '[ "$(gate Explore)" = "advise" ]'
+setting_set ROUTING_STRATEGY reserve
+check "reserve healthy behavior unchanged"  '[ "$(gate Explore)" = "allow" ]'
+
+echo "== account settings overlay and CLI =="
+mkdir -p "$BRAIN_ACCOUNTS_DIR/work" "$HOME/.claude-work"
+printf 'PORT=8320\n' > "$BRAIN_ACCOUNTS_DIR/work/account"
+printf 'User instructions stay here.\n' > "$HOME/.claude-work/CLAUDE.md"
+setting_set ROUTING_STRATEGY claude-first
+check "routing CLI writes only the account" '"$ROOT/host/bin/brain" config routing consultant-first --account work >/dev/null && grep -qx ROUTING_STRATEGY=consultant-first "$BRAIN_ACCOUNTS_DIR/work/settings"'
+check "credits CLI writes the account"      '"$ROOT/host/bin/brain" config routing credits allow --account work >/dev/null && grep -qx ROUTING_CREDITS=allow "$BRAIN_ACCOUNTS_DIR/work/settings"'
+check "account writes retain global routing" '[ "$(routing_strategy)" = "claude-first" ] && [ "$(routing_credits)" = "last" ]'
+check "overlay wins, missing keys inherit global" '(export BRAIN_ACCOUNT=work; . "$ROOT/host/lib/common.sh"; [ "$(routing_strategy)" = "consultant-first" ] && [ "$(usage_reserve_pct)" = "15" ])'
+check "usage CLI writes the account"        '"$ROOT/host/bin/brain" config usage reserve 22 --account work >/dev/null && grep -qx USAGE_RESERVE_PCT=22 "$BRAIN_ACCOUNTS_DIR/work/settings"'
+check "account usage write retains global"  '[ "$(usage_reserve_pct)" = "15" ]'
+check "config marks effective account overrides" '"$ROOT/host/bin/brain" config --account work | grep -q "USAGE_RESERVE_PCT = 22 (work override)"'
+check "managed usage block records effective routing" 'grep -q "This account.*routing strategy: consultant-first, credits allow." "$HOME/.claude-work/CLAUDE.md"'
+check "managed usage block preserves user text" 'grep -qx "User instructions stay here." "$HOME/.claude-work/CLAUDE.md"'
+check "without explicit flag writes stay global" 'BRAIN_ACCOUNT=work "$ROOT/host/bin/brain" config routing reserve >/dev/null && [ "$(routing_strategy)" = "reserve" ] && grep -qx ROUTING_STRATEGY=consultant-first "$BRAIN_ACCOUNTS_DIR/work/settings"'
+check "explicit default account writes global" '"$ROOT/host/bin/brain" config routing claude-first --account default >/dev/null && [ "$(routing_strategy)" = "claude-first" ]'
+check "same-file overlay is harmless"       '(ln -s "$BRAIN_SETTINGS_FILE" "$WORK/settings-alias"; BRAIN_ACCOUNT_SETTINGS_FILE="$WORK/settings-alias"; setting_set_account ROUTING_CREDITS allow; [ -L "$WORK/settings-alias" ] && [ "$(setting_get ROUTING_CREDITS last)" = "allow" ])'
+setting_set ROUTING_CREDITS last
+check "invalid routing strategy rejected"   '! "$ROOT/host/bin/brain" config routing nonsense >/dev/null 2>&1'
+check "invalid routing credits rejected"    '! "$ROOT/host/bin/brain" config routing credits nonsense >/dev/null 2>&1'
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

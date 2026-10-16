@@ -14,6 +14,19 @@ task class; if the first choice's vendor isn't linked, fall back down the list.
 | Second opinion on an important conclusion | a DIFFERENT family than produced it: `brain-grok` or `brain-sol` | `high` |
 
 Rules:
+- Trivial work never goes to `brain-astra`/`brain-sol` at `xhigh`. Failed twice on something
+  hard? Consult `brain-astra` at `xhigh` with full context instead of retrying.
+- High-stakes review goes to a different family than the one that wrote the code.
+- Pass files with `brain-ask --context-file PATH`; `--response review|debug|architecture|concise`
+  shortens answers. On grok, `--response review|implementation` needs `--effort low` too.
+- Vendor not linked: tell the user `brain auth chatgpt|grok|kimi`, use the next fallback.
+  `brain-astra` says `unknown provider for model gpt-6-astra`: fall through to `brain-sol`,
+  tell the user once, don't guess another model id.
+- A report starting `NEEDS INPUT:`: relay its questions, then resume that SAME agent.
+
+<!-- claude-brain:more -->
+
+All rules, with the reasons behind them:
 - Easy tasks stay cheap: never send trivial work to `brain-astra` or `brain-sol` at
   `xhigh` — handle it yourself or use `brain-luna --effort low`.
 - Escalate, don't spin: if you've failed twice on a hard problem, consult `brain-astra`
