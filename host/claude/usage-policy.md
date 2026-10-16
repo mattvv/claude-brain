@@ -60,7 +60,7 @@ If the guard blocks a dispatch, do not retry it and do not work around it. Eithe
 step inline, or hand it to a consultant. Tell the user what happened and mention that
 `brain usage override <minutes>` lifts the block if they would rather spend the reserve.
 
-Honest reporting: in the RC lane a `brain-*` agent is a *bridge* — it runs on Claude and
-relays to the other model, so offloading saves real tokens but not all of them. In the
+Honest reporting: in the RC lane a `brain-*` agent is a *bridge* — it runs on Claude Haiku
+and relays to the other model, so offloading saves most tokens but not all of them. In the
 multi lane the consultant executes natively and the saving is much larger. Do not claim
 more than that.

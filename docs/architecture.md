@@ -43,7 +43,8 @@ phone/app ◄── Remote Control ──► claude (native Anthropic auth, tmux
   `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` explicitly scrubbed from
   the environment, so Remote Control always works.
 - The brain is always Claude. Other models are **consultants**: bridge agents
-  (`host/claude/agents-rc/`) read the needed files, compose one self-contained prompt,
+  (`host/claude/agents-rc/`, pinned to Haiku since they only relay) gather the needed
+  file paths, compose one self-contained prompt,
   and call the local router with the `brain-ask` CLI (`POST /v1/messages`, Anthropic wire
   format, bearer token from `~/.config/brain/token`).
 - The router is stateless per call; multi-turn = re-send context.
