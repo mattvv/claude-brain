@@ -1,5 +1,20 @@
 # claude-brain usage-aware routing
 
+`brain usage` shows real Claude headroom per window and which consultant vendors can take
+work. Anthropic and ChatGPT report genuine numbers; Grok and Kimi expose none, so never
+invent a figure for them.
+
+__ROUTING_STRATEGY__
+
+As Claude headroom falls, move implementation, review and bulk reading to `brain-*`
+consultants rather than slowing down. At the reserve the guard hook deliberately blocks
+Anthropic-backed subagents (`Explore`, `Plan`, `general-purpose`, `brain-fable`, …). Don't
+retry or work around a block: do the step inline or hand it to a consultant, tell the user,
+and mention `brain usage override <minutes>`. In the RC lane a `brain-*` agent is a bridge
+running on Claude, so offloading saves real tokens but not all of them; don't overclaim.
+
+<!-- claude-brain:more -->
+
 Your Claude subscription is metered in rolling windows (a ~5h session window, weekly
 windows, and sometimes a weekly window scoped to one model). The other vendors behind the
 `brain-*` consultants are separate subscriptions with separate limits — spending one does

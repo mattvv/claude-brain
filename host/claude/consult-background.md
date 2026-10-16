@@ -1,5 +1,16 @@
 # claude-brain consultant visibility
 
+Run consultations and `brain-*` bridge agents in the background (`run_in_background: true`).
+**The user cannot see Bash output**; in a Remote Control session your chat text is all they see.
+While one runs, poll with `sleep 45; brain consult status` (never a loop of sleeps, never
+over ~60s per call) and write one chat line between polls on what the consultant is
+*arguing*. At `--effort xhigh` the log sits at 0 bytes for minutes; say so. Relay the full
+result when it completes.
+
+(The user can flip this default with: `brain config consult foreground`.)
+
+<!-- claude-brain:more -->
+
 Default: run consultations and `brain-*` bridge agents in the background — but keep
 them visible. `brain-ask --stream` tees its live output to
 `~/.local/state/brain/consult/current`.

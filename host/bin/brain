@@ -59,16 +59,42 @@ install_agents() {
 }
 
 # Install a managed block into this account set's CLAUDE.md (~/.claude/CLAUDE.md
-# for the default set), replacing any previous copy.
+# for the default set), replacing any previous copy. CLAUDE.md is loaded into
+# every session and every subagent, so when the source has a BRAIN_MORE_MARKER
+# line only the brief above it goes inline; the full text becomes a doc the
+# brief points at, read on demand.
+BRAIN_MORE_MARKER='<!-- claude-brain:more -->'
+
+block_doc_path() {
+  printf '%s\n' "$BRAIN_CLAUDE_DIR/docs/claude-brain/$1.md"
+}
+
 install_block() {
-  local src="$1" label="$2" target="$BRAIN_CLAUDE_DIR/CLAUDE.md" tmp
+  local src="$1" label="$2" target="$BRAIN_CLAUDE_DIR/CLAUDE.md" tmp doc doc_shown
   local start="<!-- claude-brain:$label:start -->" end="<!-- claude-brain:$label:end -->"
   mkdir -p "$BRAIN_CLAUDE_DIR"
+  doc="$(block_doc_path "$label")"
   tmp="$(mktemp)"
   if [ -f "$target" ]; then
     awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target" > "$tmp"
   fi
-  { printf '%s\n' "$start"; cat "$src"; printf '%s\n' "$end"; } >> "$tmp"
+  if grep -qxF "$BRAIN_MORE_MARKER" "$src"; then
+    mkdir -p "$(dirname "$doc")"
+    grep -vxF "$BRAIN_MORE_MARKER" "$src" > "$doc"
+    case "$doc" in
+      "$HOME"/*) doc_shown="~${doc#"$HOME"}" ;;
+      *)         doc_shown="$doc" ;;
+    esac
+    {
+      printf '%s\n' "$start"
+      awk -v m="$BRAIN_MORE_MARKER" '$0==m{exit} {print}' "$src"
+      printf 'Full reference, read on demand: `%s`\n' "$doc_shown"
+      printf '%s\n' "$end"
+    } >> "$tmp"
+  else
+    rm -f "$doc"
+    { printf '%s\n' "$start"; cat "$src"; printf '%s\n' "$end"; } >> "$tmp"
+  fi
   mv "$tmp" "$target"
 }
 
@@ -80,6 +106,8 @@ remove_block() {
   tmp="$(mktemp)"
   awk -v s="$start" -v e="$end" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$target" > "$tmp"
   mv "$tmp" "$target"
+  rm -f "$(block_doc_path "$label")"
+  rmdir "$BRAIN_CLAUDE_DIR/docs/claude-brain" "$BRAIN_CLAUDE_DIR/docs" 2>/dev/null || true
 }
 
 install_routing() {
@@ -90,11 +118,17 @@ install_routing() {
 }
 
 install_usage_block() {
-  local tmp
+  local tmp line strategy_line
   tmp="$(mktemp)"
-  cat "$BRAIN_REPO_DIR/host/claude/usage-policy.md" > "$tmp"
-  printf "\nThis account's routing strategy: %s, credits %s.\n" \
-    "$(routing_strategy)" "$(routing_credits)" >> "$tmp"
+  strategy_line="$(printf "This account's routing strategy: %s, credits %s." \
+    "$(routing_strategy)" "$(routing_credits)")"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$line" = "__ROUTING_STRATEGY__" ]; then
+      printf '%s\n' "$strategy_line"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$BRAIN_REPO_DIR/host/claude/usage-policy.md" > "$tmp"
   install_block "$tmp" usage
   rm -f "$tmp"
 }
@@ -2245,6 +2279,20 @@ account_wire_settings() {
     | if brainline($base[0].statusLine // {}) and (.statusLine == null or brainline(.statusLine))
       then .statusLine = $base[0].statusLine else . end
   ' "$dst" > "$dst.tmp" && mv "$dst.tmp" "$dst"
+  account_exclude_default_claude_md
+}
+
+# Claude Code loads .claude/CLAUDE.md from every ancestor of the working
+# directory, so a set's sessions under $HOME also load the default set's
+# CLAUDE.md and its brain blocks a second time. account_seed_claude_dir already
+# copied the user's own text from it, so the live file is excluded.
+account_exclude_default_claude_md() {
+  local settings="$BRAIN_CLAUDE_DIR/settings.json"
+  [ "$BRAIN_CLAUDE_DIR" != "$HOME/.claude" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -s "$settings" ] || echo '{}' > "$settings"
+  jq --arg f "$HOME/.claude/CLAUDE.md" '.claudeMdExcludes = ((.claudeMdExcludes // []) - [$f] + [$f])' \
+    "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
 }
 
 # Undo account_wire_settings, the agents and the CLAUDE.md blocks for this set.
@@ -2258,13 +2306,15 @@ account_unwire() {
   remove_block usage
   remove_block consult
   if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
-    jq --arg managed "$BRAIN_MANAGED_HOOKS" '
+    jq --arg managed "$BRAIN_MANAGED_HOOKS" --arg default_md "$HOME/.claude/CLAUDE.md" '
       def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
       .hooks.PreToolUse = strip(.hooks.PreToolUse)
       | .hooks.PostToolUse = strip(.hooks.PostToolUse)
       | .hooks.SessionStart = strip(.hooks.SessionStart)
       | if ((.statusLine.command // "") | test("claude-brain|/host/claude/statusline.sh"))
         then del(.statusLine) else . end
+      | if has("claudeMdExcludes") then .claudeMdExcludes -= [$default_md] else . end
+      | if .claudeMdExcludes == [] then del(.claudeMdExcludes) else . end
     ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
   fi
 }

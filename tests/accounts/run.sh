@@ -137,6 +137,14 @@ check "brain hooks registered for the set" \
   'jq -r ".hooks.PreToolUse[].hooks[].command" "$H/.claude-work/settings.json" | grep -q model-guard'
 check "brain statusline for the set" \
   'jq -r ".statusLine.command" "$H/.claude-work/settings.json" | grep -q statusline.sh'
+check "the default set's CLAUDE.md is excluded from the set's sessions" \
+  'jq -r ".claudeMdExcludes[]" "$H/.claude-work/settings.json" | grep -qx "$H/.claude/CLAUDE.md"'
+check "ops block inlines only its brief" \
+  'grep -q "Full reference, read on demand: \`~/.claude-work/docs/claude-brain/ops.md\`" "$H/.claude-work/CLAUDE.md" && ! grep -q "Link AI accounts yourself" "$H/.claude-work/CLAUDE.md"'
+check "ops detail lives in the on-demand doc" \
+  'grep -q "Link AI accounts yourself" "$H/.claude-work/docs/claude-brain/ops.md" && ! grep -q "claude-brain:more" "$H/.claude-work/docs/claude-brain/ops.md"'
+check "credential rule stays inline" \
+  'awk "/claude-brain:ops:start/,/claude-brain:ops:end/" "$H/.claude-work/CLAUDE.md" | grep -q "cli-proxy-api"'
 check "default settings untouched" \
   '[ "$(jq -r ".hooks.PreToolUse | length" "$H/.claude/settings.json")" = 1 ]'
 check "says how to log in" 'printf %s "$OUT" | grep -q "brain auth anthropic --account work"'
@@ -277,6 +285,8 @@ brain account rm work --yes >/dev/null 2>&1
 check "rm without --purge keeps the logins" '[ ! -d "$H/.config/brain/accounts/work" ] && [ -d "$H/.claude-work" ]'
 check "and takes the brain wiring out of them" \
   '! grep -q "claude-brain:routing" "$H/.claude-work/CLAUDE.md" && [ ! -e "$H/.claude-work/agents/brain-sol.md" ]'
+check "and the on-demand docs and CLAUDE.md exclude" \
+  '[ ! -e "$H/.claude-work/docs/claude-brain" ] && [ "$(jq -r ".claudeMdExcludes // [] | length" "$H/.claude-work/settings.json")" = 0 ]'
 check "default set untouched throughout" \
   'grep -q default-token "$H/.config/brain/token" && grep -q "Never open firewall ports" "$H/.claude/CLAUDE.md" && [ ! -L "$H/.claude/skills" ]'
 
