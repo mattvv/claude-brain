@@ -17,7 +17,7 @@ trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
 mkdir -p "$HOME/.claude"
 printf 'my own notes\n' > "$HOME/.claude/CLAUDE.md"
-MD="$HOME/.claude/CLAUDE.md"
+export MD="$HOME/.claude/CLAUDE.md"
 
 echo "== brain config pstack =="
 check "off by default"            '[ "$(bash "$BRAIN" config pstack)" = off ]'
