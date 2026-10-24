@@ -213,6 +213,8 @@ Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
 | `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
 | `brain usage` | See how much of each subscription is left, and who can still take work (`override <min>` to spend the reserve anyway) |
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
+| `brain config pstack on` | Work in [pstack mode](#pstack-mode-verification-first-development): playbooks, verify-first, `brain-*` review panels, evidence in replies |
+| `brain verify [args]` | Run the current repo's verify skill (`.claude/skills/verify-*`): `doctor` by default, or `launch` / `tap ...` / `shot ...` |
 | `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
 | `brain update` | Get the latest claude-brain. New sessions (phone included) and the statusline say when one is out, and `brain status` checks on demand |
 | `brain config autoupdate on` | Let the brain install releases itself: at most once a day, only on a clean `main` checkout, never mid-consultation. The next session says it updated |
@@ -330,6 +332,34 @@ Every part of this fails open. An expired token, a changed endpoint, no network,
 payload we do not recognise all mean "unknown", and unknown never blocks anything. Nor does
 the guard ever block when no consultant is linked — there would be nowhere for the work to
 go.
+
+## pstack mode (verification-first development)
+
+`brain config pstack on` switches every new session to the working method from Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), the skill set she uses to ship at Cursor (ported to Claude Code as [open-pstack](https://github.com/ericlitman/open-pstack)). The short version: **if you want to go fast, go deep first, and never call it done until you've proven it on the real thing.**
+
+What changes in a session:
+
+- **It starts from a playbook.** Claude classifies the task (investigation, bug fix, feature, refactor, perf, prototype) and copies that playbook's steps into its todo list. It reads how the system works before changing it, names the data shape before writing code, and makes the smallest complete change.
+- **It proves the result on the real app.** "The tests pass" isn't the bar. For anything a user sees, Claude drives the app through the repo's verify skill and keeps screenshots and logs. Pure logic gets headless tests.
+- **Risky calls get a panel.** A contested design or a risky diff goes to three other model families (`brain-sol`, `brain-grok`, `brain-muse`) alongside Claude's own review. Agreement is signal; disagreement is a finding. Panels run through the brain's router, so they respect your usage reserve and show up in the consult statusline.
+- **Replies carry evidence.** Every claim is labelled measured, inferred or guess. Anything that couldn't be verified is named, along with why.
+
+### Verify skills
+
+A verify skill is a small, project-local skill at `.claude/skills/verify-<app>/` that tells an agent how to drive your app like a user. It covers launch, a read-only doctor check, drive (real selectors and commands), evidence, and cleanup. It also holds a feature map: one file per user-facing feature describing how to reach it, how to drive it, and its gotchas. `brain verify` finds the repo's skill and runs it:
+
+```bash
+brain verify                 # the skill's doctor: is the app worth driving?
+brain verify launch          # start it until it's usable
+brain verify tap --text Continue
+brain verify shot after-continue
+```
+
+No verify skill yet? Ask Claude to make one ("create a verify skill for this repo"). With pstack mode on, it interviews the repo, writes the skill, and runs it end to end once before handing it over. For Unity projects the skill drives the open editor through the [Unity CLI](https://docs.unity.com/en-us/unity-cli) and its Pipeline package. For example, a UI Toolkit game can be tapped at iPhone resolution with real Input System events.
+
+If you also install the open-pstack plugin, its skills (`architect`, `interrogate`, `tdd`, `create-verification-skill` ...) work alongside this mode. The mode tells Claude to route the plugin's model roles to `brain-*` consultants, not the plugin's own CLI runner.
+
+`brain config pstack off` turns it back off. It's a managed block in `~/.claude/CLAUDE.md`, so your own text is untouched either way.
 
 ## Saving tokens (the compression engine)
 
