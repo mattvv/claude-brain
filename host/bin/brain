@@ -21,7 +21,7 @@
 #   brain keepawake  stop this machine from sleeping (shows what it will change)
 #   brain expose P   share a dev server on port P (tailnet HTTPS; --public
 #                    for a world-reachable Funnel URL; 'off' to stop)
-#   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|claude|github
+#   brain auth X     (re)run a login: anthropic|chatgpt|grok|kimi|muse|claude|github
 #   brain auth start|paste|check X   drive a login non-interactively (for
 #                    Claude sessions / remote use — see brain-ops.md)
 #   brain setup      first-time onboarding wizard (resumable)
@@ -45,7 +45,7 @@ AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
 AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
 
 # Names covered by both lanes; installing one lane removes the other's copies.
-ALL_BRAIN_AGENTS=(brain-astra brain-fable brain-grok brain-kimi brain-luna brain-sol brain-terra)
+ALL_BRAIN_AGENTS=(brain-astra brain-fable brain-grok brain-kimi brain-luna brain-muse brain-sol brain-terra)
 
 install_agents() {
   local src="$1" name f
@@ -1158,7 +1158,7 @@ cmd_status() {
     found=1
     ok "$(basename "$f" .json)"
   done
-  [ "$found" -eq 1 ] || warn "none yet — run: brain auth chatgpt|grok|kimi"
+  [ "$found" -eq 1 ] || warn "none yet — run: brain auth chatgpt|grok|kimi|muse"
 
   local u_state
   u_state="$(usage_state 2>/dev/null || echo unknown)"
@@ -1244,6 +1244,7 @@ vendor_login_flags() {
     chatgpt) echo "--codex-device-login" ;;
     grok)    echo "--xai-login --no-browser" ;;
     kimi)    echo "--kimi-login --no-browser" ;;
+    muse)    echo "--meta-login --no-browser" ;;
     claude)  echo "--claude-login --no-browser" ;;
     *)       return 1 ;;
   esac
@@ -1286,9 +1287,10 @@ cmd_auth_start() {
 
   info "open this link in any browser and approve:"
   printf '\n  %s\n\n' "$url"
-  if [ "$vendor" = chatgpt ] || printf '%s' "$url" | grep -qi device; then
+  if printf '%s' "$url" | grep -qi device || grep -qi 'enter this code' "$log" 2>/dev/null; then
     # Device-style flow: completes on its own once approved.
-    grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log" | head -1 \
+    { sed -n 's/.*enter this code: *\([^[:space:]]*\).*/\1/p' "$log"
+      grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log"; } 2>/dev/null | head -1 \
       | sed 's/^/  device code: /' || true
     info "then run: brain auth check $vendor$(account_flag)"
   else
@@ -1330,7 +1332,7 @@ cmd_auth_check() {
 cmd_auth() {
   local vendor="${1:-}"
   case "$vendor" in
-    start) shift; cmd_auth_start "${1:?usage: brain auth start <chatgpt|grok|kimi|claude>}"; return ;;
+    start) shift; cmd_auth_start "${1:?usage: brain auth start <chatgpt|grok|kimi|muse|claude>}"; return ;;
     paste) shift; cmd_auth_paste "${1:?vendor required}" "${2:-}"; return ;;
     check) shift; cmd_auth_check "${1:?vendor required}"; return ;;
   esac
@@ -1362,13 +1364,18 @@ cmd_auth() {
       ;;
     grok)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
-      info "Grok login: open the printed URL in your laptop browser"
+      info "Grok device login: you'll get a URL + code to enter on any browser"
       "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --xai-login --no-browser
       ;;
     kimi)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
-      info "Kimi login: open the printed URL in your laptop browser"
+      info "Kimi device login: you'll get a URL + code to enter on any browser"
       "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --kimi-login --no-browser
+      ;;
+    muse)
+      [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
+      info "Meta Muse device login: you'll get a URL + code to enter on any browser"
+      "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --meta-login --no-browser
       ;;
     claude)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
@@ -1400,7 +1407,7 @@ cmd_auth() {
       ok "joined tailnet as: $("$(tailscale_bin)" status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
       ;;
     *)
-      die "usage: brain auth <anthropic|chatgpt|grok|kimi|claude|github|tailscale>"
+      die "usage: brain auth <anthropic|chatgpt|grok|kimi|muse|claude|github|tailscale>"
       ;;
   esac
   # OAuth tools may write loose perms; re-tighten.
@@ -1489,7 +1496,7 @@ cmd_setup() {
       --scope)      BRAIN_SETUP_SCOPE="${2:?}"; shift 2 ;;
       --workspace)  BRAIN_SETUP_WS="${2:?}"; shift 2 ;;
       --autostart)  BRAIN_SETUP_AUTOSTART=1; shift ;;
-      *) die "usage: brain setup [--yes] [--scope machine|workspace] [--workspace DIR] [--link chatgpt,grok,kimi,github] [--autostart]" ;;
+      *) die "usage: brain setup [--yes] [--scope machine|workspace] [--workspace DIR] [--link chatgpt,grok,kimi,muse,github] [--autostart]" ;;
     esac
   done
 
@@ -1599,6 +1606,9 @@ cmd_setup() {
   if vendor_linked kimi; then step_done "Kimi linked"; else
     if setup_offer kimi && setup_yn "  Link a Kimi account?"; then cmd_auth kimi || warn "Kimi login didn't finish — retry later: brain auth kimi"; fi
   fi
+  if vendor_linked muse; then step_done "Meta Muse linked"; else
+    if setup_offer muse && setup_yn "  Link a Meta Muse (Muse Code) account?"; then cmd_auth muse || warn "Muse login didn't finish — retry later: brain auth muse"; fi
+  fi
 
   # 6. GitHub
   info "step 6/7: connect GitHub (so your brain can work on your repos)"
@@ -1669,7 +1679,7 @@ cmd_setup() {
     brain status     is everything healthy?
     brain autostart  come back automatically after a reboot
     brain multi      power mode: other models drive natively (no phone control)
-    brain auth X     redo any login (anthropic|chatgpt|grok|kimi|github)
+    brain auth X     redo any login (anthropic|chatgpt|grok|kimi|muse|github)
     brain update     get the latest claude-brain
     brain uninstall  remove claude-brain and restore your Claude Code config
     brain explore "question"   cheap-model repo navigation (discovery only)
@@ -1831,6 +1841,11 @@ cmd_usage() {
         --argjson cx_headroom "$(usage_codex_field headroom 2>/dev/null || echo null)" \
         --argjson cx_primary "$(usage_codex_field primary 2>/dev/null || echo null)" \
         --argjson cx_secondary "$(usage_codex_field secondary 2>/dev/null || echo null)" \
+        --arg mu_state "$(usage_muse_state)" \
+        --arg mu_plan "$(usage_muse_field plan 2>/dev/null || echo '')" \
+        --argjson mu_headroom "$(usage_muse_field headroom 2>/dev/null || echo null)" \
+        --argjson mu_window "$(usage_muse_field window 2>/dev/null || echo null)" \
+        --argjson mu_weekly "$(usage_muse_field weekly 2>/dev/null || echo null)" \
         '{state:$state, enforce:$enforce, override_active:$override,
           thresholds:{reserve:$reserve, advisory:$advisory},
           anthropic:{headroom:$headroom, binding_window:$bind,
@@ -1839,6 +1854,8 @@ cmd_usage() {
                      resets_in:$resets_in, updated_at:$updated_at, error:$err},
           chatgpt:{state:$cx_state, headroom:$cx_headroom, plan:$cx_plan,
                    primary_used:$cx_primary, secondary_used:$cx_secondary},
+          muse:{state:$mu_state, headroom:$mu_headroom, plan:$mu_plan,
+                window_used:$mu_window, weekly_used:$mu_weekly},
           consultant_lanes:($lanes | if . == "" then [] else split(",") end)}'
       return 0
       ;;
@@ -1907,8 +1924,16 @@ cmd_usage() {
         "$v" "$cx" "$(usage_codex_field primary)" "$(usage_codex_field secondary)" \
         "$(usage_codex_field plan)" \
         "$([ "$cs" = "critical" ] && [ "$(routing_strategy)" != claude-first ] && printf ' %s' "${C_BOLD}← at reserve${C_RESET}")"
-    elif [ "$v" = "chatgpt" ] && ! usage_probe_enabled; then
+    elif [ "$v" = "muse" ] && cx="$(usage_muse_field headroom 2>/dev/null)" && [ "$(usage_muse_state)" != unknown ]; then
+      cs="$(usage_muse_state)"
+      printf '  %-10s headroom %s%% (5h %s%% used, weekly %s%%) · plan %s%s\n' \
+        "$v" "$cx" "$(usage_muse_field window)" "$(usage_muse_field weekly)" \
+        "$(usage_muse_field plan)" \
+        "$([ "$cs" = "critical" ] && printf ' %s' "${C_BOLD}← at reserve${C_RESET}")"
+    elif { [ "$v" = "chatgpt" ] || [ "$v" = "muse" ]; } && ! usage_probe_enabled; then
       printf '  %-10s %s\n' "$v" "linked · headroom unread (probe off)"
+    elif [ "$v" = "muse" ]; then
+      printf '  %-10s %s\n' "$v" "linked · headroom not read yet (refreshes with the usage probe)"
     else
       printf '  %-10s %s\n' "$v" "linked · headroom not measurable (no usage endpoint)"
     fi
@@ -2399,7 +2424,7 @@ account_create() {
   account_proxy_up && ok "router for $BRAIN_ACCOUNT healthy on $BRAIN_PROXY_URL"
   info "next:"
   printf '    brain auth anthropic --account %s     # sign in to the %s Claude account\n' "$BRAIN_ACCOUNT" "$BRAIN_ACCOUNT"
-  printf '    brain auth chatgpt --account %s       # its ChatGPT account (also grok|kimi)\n' "$BRAIN_ACCOUNT"
+  printf '    brain auth chatgpt --account %s       # its ChatGPT account (also grok|kimi|muse)\n' "$BRAIN_ACCOUNT"
   printf '    brain repo add <owner/name> --account %s\n' "$BRAIN_ACCOUNT"
 }
 

@@ -13,13 +13,13 @@ entries whose vendor isn't linked; the guard hook will tell you).
 | wide refactors, gnarly debugging | `brain-astra`, `brain-sol`, `brain-fable`, `brain-grok` |
 | code review | `brain-astra`, `brain-sol`, `brain-terra`, `brain-grok` |
 | smoke-testing another lane's work | `brain-grok`, `brain-luna` |
-| huge-context digestion (logs, whole dirs) | `brain-kimi` |
+| huge-context digestion (logs, whole dirs) | `brain-kimi`, `brain-muse` |
 | architecture, ambiguous planning, escalation | `brain-fable`, `brain-sol` |
 
 Defaults: executor `brain-terra`, reviewer `brain-sol`.
 
 Rules:
-- Effort is pinned per agent (luna=medium, astra/sol/terra=xhigh, grok/kimi/fable=high)
+- Effort is pinned per agent (luna=medium, astra/sol/terra=xhigh, grok/kimi/muse/fable=high)
   — do not override an agent's model or effort at dispatch time.
 - Never delegate to an agent running the same model as you (the parent) — do that work
   directly instead.

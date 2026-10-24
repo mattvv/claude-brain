@@ -9,7 +9,7 @@ your phone or [claude.ai/code](https://claude.ai/code) in a browser, attach to y
 and give it work. It keeps going when you close your laptop, leave the house, or go to bed.
 
 The twist: your brain isn't limited to Claude. It has a built-in **model router** that can
-also consult **Grok**, **GPT**, and **Kimi** — using your own subscriptions to those
+also consult **Grok**, **GPT**, **Kimi**, and **Meta Muse** — using your own subscriptions to those
 services — and it can work directly on your **GitHub** repositories.
 
 claude-brain is two things working together: a **model router** (one Claude session that
@@ -23,7 +23,8 @@ your brain machine; both are on by default.
   │ Claude app        │ ◄───────────────► │ Claude Code (always on)    │
   │ claude.ai/code    │                   │   ├── brain-grok  ─┐       │
   └──────────────────┘                   │   ├── brain-sol   ─┼─► model router
-                                          │   ├── brain-kimi  ─┘  (Grok/GPT/Kimi)
+                                          │   ├── brain-kimi   │  (GPT/Grok/Kimi/Muse)
+                                          │   ├── brain-muse  ─┘       │
                                           │   └── your GitHub repos    │
                                           └────────────────────────────┘
 ```
@@ -45,7 +46,7 @@ Claude reads the repo's install guide and walks you through it, asking:
    DigitalOcean droplet it creates for you.
 2. **How much of the machine does it get?** — its own working folder, or the run of the
    whole machine (the droplet default).
-3. **Which accounts should it use?** — Claude is required; ChatGPT, Grok, Kimi, and GitHub
+3. **Which accounts should it use?** — Claude is required; ChatGPT, Grok, Kimi, Muse, and GitHub
    are each optional and can be added later.
 4. **Phone control?** — set up the Remote Control server so sessions show up in the Claude
    app.
@@ -85,7 +86,8 @@ guessing silently.
 - A **Claude subscription** (Pro or Max) — this is the brain itself. Required.
 - A computer to run it on, from the table above. Required.
 - Optional, each adds a model to your brain: a **ChatGPT** subscription, a **Grok** (X.AI)
-  subscription, a **Kimi** subscription.
+  subscription, a **Kimi** subscription, a **Meta Muse Code** subscription (the developer
+  plan from dev.meta.ai — the consumer Muse plan on meta.com doesn't include API access).
 - Optional: a **GitHub account**, if you want your brain to read and write your code.
 
 ## Your first phone session
@@ -104,7 +106,7 @@ to the router and brings the answer back.
 
 **Your brain manages itself.** From that same phone session you can just ask it to:
 - *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
-- *"link my Grok account"* — same, you tap the link, then paste the address it lands on back into chat;
+- *"link my Grok account"* (or Kimi, or Muse) — same: you tap the link and approve the code;
 - *"install &lt;some tool&gt;"* or *"add the &lt;X&gt; MCP server"* — it installs and configures it;
 - *"update yourself"* — it pulls the latest claude-brain release.
 
@@ -207,7 +209,7 @@ Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
 | `brain teleport <machine>` | Move this session — conversation, branch and uncommitted work — to the brain on another machine ([details](#moving-a-session-to-another-brain-teleport)) |
 | `brain multi` | Power mode: other models drive natively — no phone control in this mode |
 | `brain expose <port>` | See a web app your brain is building — private HTTPS link for your devices (add `--public` to share with anyone, `off` to stop) |
-| `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `github` `tailscale` |
+| `brain auth <thing>` | Redo any login: `anthropic` `chatgpt` `grok` `kimi` `muse` `github` `tailscale` |
 | `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
 | `brain usage` | See how much of each subscription is left, and who can still take work (`override <min>` to spend the reserve anyway) |
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
@@ -220,7 +222,7 @@ Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
 
 One brain can hold more than one set of logins. Your own Claude and ChatGPT stay the
 `default` set; an extra set — say `work` — gets its own Claude login, its own ChatGPT/Grok/
-Kimi links, its own router process, token and port, and its own usage numbers. Repos are
+Kimi/Muse links, its own router process, token and port, and its own usage numbers. Repos are
 pinned to a set, so a work repo's phone sessions run on the work Claude account and its
 `brain-*` consultants bill the work ChatGPT account — never yours, and never by accident.
 
@@ -242,7 +244,7 @@ Run them on the brain machine — at its own keyboard, over SSH, or by asking a 
 to run them for you.
 
 **What's `brain multi`?** In your normal session, Claude is always the brain and other
-models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi
+models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi/Muse
 with full tool access, parable-style. The trade-off: phone control (Remote Control) is
 technically impossible in that mode, so you use it at a terminal.
 
@@ -265,6 +267,7 @@ consultant vendors
   chatgpt    headroom 98% (weekly 2% used, secondary 0%) · plan prolite
   grok       linked · headroom not measurable (no usage endpoint)
   kimi       not linked — brain auth kimi
+  muse       headroom 96% (5h 4% used, weekly 1%) · plan High_Usage
 ```
 
 Under the default `reserve` strategy, the brain does this automatically:
@@ -310,8 +313,13 @@ and `brain usage --account work` shows the effective policy, tier, and credit si
   turn (**~21 tokens**, at most every 15 minutes) and keeps the headers. If you would rather
   not spend anything at all: `brain config usage probe off`, and ChatGPT goes back to being
   reported as unread rather than guessed at.
+- **Meta Muse** reports its five-hour and weekly usage as an event at the end of a real
+  streamed turn, which the router strips — so the same probe sends one minimal turn to Muse
+  Code and keeps that event. `brain usage` shows the binding window and your plan tier.
 - **Grok and Kimi** expose nothing reachable, and are reported as *linked, headroom not
-  measurable* — never a number we cannot actually see.
+  measurable* — never a number we cannot actually see. (Grok's responses carry only
+  per-minute rate limits, not your weekly subscription pool, so we don't present them as
+  headroom.)
 
 Every vendor also has a free negative signal: the router records when one has hit its own
 quota, and a vendor in cooldown drops out of the rotation until it recovers. A consultant
@@ -350,7 +358,7 @@ What it does:
   small, locally-gathered pack to a *cheap* model and returns one dense, cited answer — so the
   expensive brain never reads a pile of files just to orient itself. The cheap model is a
   configurable fallback chain (`[explore] models`, default `gpt-6-luna,grok-4.5`).
-- **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
+- **Cheaper consultations.** When your brain asks Grok/GPT/Kimi/Muse about files, it hands over the
   *paths* (`brain-ask --context-file`) so the file bytes never fill the brain's *own* context
   twice, and it can ask the consultant for a terser answer (`--response debug|concise|…`) at the
   right effort for the vendor.

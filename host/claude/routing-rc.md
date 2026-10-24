@@ -10,8 +10,8 @@ task class; if the first choice's vendor isn't linked, fall back down the list.
 | Frontend / React / UI | `brain-terra`, `brain-sol` | `high` |
 | Hard debugging, gnarly logic, high-recall code review | `brain-astra`, `brain-sol`, `brain-grok` | `xhigh` |
 | Systems / Rust / C++ / terminal-heavy | `brain-grok`, `brain-sol` | `high` |
-| Digesting huge inputs (long logs, whole directories) | `brain-kimi` | `high` |
-| Second opinion on an important conclusion | a DIFFERENT family than produced it: `brain-grok` or `brain-sol` | `high` |
+| Digesting huge inputs (long logs, whole directories) | `brain-kimi`, `brain-muse` | `high` |
+| Second opinion on an important conclusion | a DIFFERENT family than produced it: `brain-grok`, `brain-sol` or `brain-muse` | `high` |
 
 Rules:
 - Trivial work never goes to `brain-astra`/`brain-sol` at `xhigh`. Failed twice on something
@@ -19,7 +19,7 @@ Rules:
 - High-stakes review goes to a different family than the one that wrote the code.
 - Pass files with `brain-ask --context-file PATH`; `--response review|debug|architecture|concise`
   shortens answers. On grok, `--response review|implementation` needs `--effort low` too.
-- Vendor not linked: tell the user `brain auth chatgpt|grok|kimi`, use the next fallback.
+- Vendor not linked: tell the user `brain auth chatgpt|grok|kimi|muse`, use the next fallback.
   `brain-astra` says `unknown provider for model gpt-6-astra`: fall through to `brain-sol`,
   tell the user once, don't guess another model id.
 - A report starting `NEEDS INPUT:`: relay its questions, then resume that SAME agent.
@@ -44,7 +44,7 @@ All rules, with the reasons behind them:
   review|implementation` needs `--effort low` too (~80% fewer output tokens, no coverage
   loss) — grok's default reasoning burn dominates those categories otherwise.
 - If a consultant reports its vendor isn't linked, tell the user the exact fix
-  (`brain auth chatgpt|grok|kimi`) and continue with the next fallback.
+  (`brain auth chatgpt|grok|kimi|muse`) and continue with the next fallback.
 - If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,
   then resume that SAME agent with the answers (its gathered context is intact) rather
   than spawning a fresh one.

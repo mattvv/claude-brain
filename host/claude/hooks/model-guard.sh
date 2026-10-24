@@ -36,6 +36,7 @@ case "$AGENT" in
       brain-astra|brain-sol|brain-terra|brain-luna) prefix="codex"  cmd="chatgpt" vendor="ChatGPT" ;;
       brain-grok)                       prefix="xai"    cmd="grok"    vendor="Grok (X.AI)" ;;
       brain-kimi)                       prefix="kimi"   cmd="kimi"    vendor="Kimi" ;;
+      brain-muse)                       prefix="meta"   cmd="muse"    vendor="Meta Muse" ;;
       brain-fable)                      prefix="claude" cmd="claude"  vendor="Claude (proxy vendor)" ;;
       *)                                prefix="" ;;
     esac

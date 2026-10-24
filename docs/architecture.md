@@ -29,7 +29,8 @@ phone/app ◄── Remote Control ──► claude (native Anthropic auth, tmux
                                    │
                                    ├─ Agent: brain-grok ──┐
                                    ├─ Agent: brain-sol    ├─ Bash: brain-ask <model>
-                                   └─ Agent: brain-kimi ──┘        │ HTTP (loopback)
+                                   ├─ Agent: brain-kimi   │        │ HTTP (loopback)
+                                   └─ Agent: brain-muse ──┘        │
                                                                    ▼
                                                     cli-proxy-api :8317 (systemd)
                                                      │ OAuth records ~/.cli-proxy-api
@@ -186,7 +187,14 @@ decision function shared by the CLI, the hooks, and the statusline:
   `USAGE_PROBE=off` to disable. A rejected model 400s *before* the rate-limit middleware and
   returns no headers, so the turn has to be real; the request must also carry
   `Originator: codex-tui` and the pinned codex UA or Cloudflare challenges it.
-- **Signal — Grok/Kimi.** Nothing reachable; unknown-but-available.
+- **Signal — Meta Muse.** Muse Code ends every streamed `/v1/responses` turn with a
+  `response.subscription_usage` event (`window` = five-hour and `weekly` `used_percent`, each
+  with `resets_at`). The router strips it from loopback responses, so `usage_refresh_muse`
+  sends one minimal turn with the minted Muse Code key (stdin, never argv) on the same
+  `USAGE_PROBE` switch and TTL as Codex; headroom is `100 - max(window, weekly)`.
+- **Signal — Grok/Kimi.** Nothing reachable; unknown-but-available. Grok responses do carry
+  `x-ratelimit-*` headers, but those are per-minute request/token limits, not the weekly
+  subscription pool, so they are deliberately not reported as headroom.
 - **Free negative signal, all proxy vendors.** `save-cooldown-status: true` gives a
   "this vendor 429'd until T" record (`.cds` files beside the credentials).
 - **Refresh is bash + curl, not the Rust crate.** `brain-compress` builds reqwest with no TLS
@@ -228,10 +236,12 @@ accounts using the headless auth flow:
 - `brain auth start <vendor>` runs the OAuth login in a detached tmux pane
   (`tmux pipe-pane` captures output) and prints the login URL — which a Claude session
   relays to the user's phone.
-- ChatGPT's device flow completes on its own (`brain auth check chatgpt` polls).
-- Grok/Kimi callbacks land on a dead `localhost` URL in the user's browser; the user
-  pastes it back into chat and `brain auth paste <vendor> '<url>'` feeds it to the
-  waiting login's pty via `tmux send-keys`.
+- ChatGPT, Grok, Kimi and Muse use device-code flows that complete on their own
+  (`brain auth check <vendor>` polls).
+- A login whose callback lands on a dead `localhost` URL instead (e.g. the proxy's own
+  Claude login) is finished by the user pasting it back into chat;
+  `brain auth paste <vendor> '<url>'` feeds it to the waiting login's pty via
+  `tmux send-keys`.
 
 Updates: `brain update` = `git pull` + re-run install (agents/hooks/routing/unit refresh)
 + proxy rebuild if the PIN changed + `claude update`. The `brain`/`brain multi` launchers

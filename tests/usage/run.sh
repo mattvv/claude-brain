@@ -332,6 +332,38 @@ printf 'updated_at=99999999999 headroom=5 bind=weekly\n' > "$BRAIN_USAGE_SUMMARY
 check "future timestamp -> unknown"          '[ "$(usage_state)" = "unknown" ]'
 check "future timestamp -> statusline mute"  '! printf "%s" "$SL_IN" | "$ROOT/host/claude/statusline.sh" | grep -q claude'
 
+echo "== Meta Muse headroom (response.subscription_usage event) =="
+# The router strips this event, so usage_refresh_muse probes for it; tests feed
+# canned SSE bodies via BRAIN_MUSE_FIXTURE instead of hitting the network.
+musefix() {
+  printf 'event: response.completed\ndata: {"type":"response.completed"}\n\nevent: response.subscription_usage\ndata: {"subscription":{"tier":"1234567890123456","weekly":{"resets_at":%s,"used_percent":%s},"window":{"resets_at":%s,"used_percent":%s,"window_duration_mins":300}},"type":"response.subscription_usage"}\n\n' \
+    "$(( $(date +%s) + 86400 ))" "$2" "$(( $(date +%s) + 3600 ))" "$1" > "$FIX/muse-$1-$2.sse"
+}
+muse_probe() { musefix "$1" "$2"; BRAIN_MUSE_FIXTURE="$FIX/muse-$1-$2.sse" usage_refresh_muse >/dev/null 2>&1; }
+printf '{"api_key":"faketoken-should-not-leak","subs_tier_name":"Muse Code High Usage","type":"meta"}\n' \
+  > "$BRAIN_AUTH_DIR/meta-test.json"
+muse_probe 10 80
+check "muse headroom = worst window"         '[ "$(usage_muse_field headroom)" = "20" ]'
+check "muse plan parsed"                     '[ "$(usage_muse_field plan)" = "High_Usage" ]'
+check "muse 5h reset parsed"                 'r="$(usage_muse_field resets_in)"; [ "$r" -gt 3500 ] && [ "$r" -le 3600 ]'
+check "20% headroom is tight"                '[ "$(usage_muse_state)" = "tight" ]'
+muse_probe 10 30
+check "muse state ok"                        '[ "$(usage_muse_state)" = "ok" ]'
+check "healthy muse stays a lane"            'usage_refresh_vendors; usage_rank_lanes | grep -q muse'
+muse_probe 7.5 2
+check "float percent truncated"              '[ "$(usage_muse_field window)" = "7" ]'
+muse_probe 95 40
+check "5h window can bind -> critical"       '[ "$(usage_muse_state)" = "critical" ]'
+usage_refresh_vendors
+check "exhausted muse marked reserve"        'grep -q "muse reserve" "$BRAIN_USAGE_VENDORS"'
+check "exhausted muse dropped from lanes"    '! usage_rank_lanes | grep -q muse'
+printf 'event: response.completed\ndata: {"type":"response.completed"}\n\n' > "$FIX/muse-none.sse"
+cp "$BRAIN_MUSE_STATE" "$FIX/muse-before"
+check "no usage event -> state untouched"    '! BRAIN_MUSE_FIXTURE="$FIX/muse-none.sse" usage_refresh_muse && [ "$(cat "$BRAIN_MUSE_STATE")" = "$(cat "$FIX/muse-before")" ]'
+check "muse key never written to state"      '! grep -rq faketoken "$BRAIN_USAGE_DIR"'
+rm -f "$BRAIN_AUTH_DIR/meta-test.json" "$BRAIN_MUSE_STATE"
+usage_refresh_vendors
+
 echo "== CLI =="
 refresh limits-tight.json
 check "brain usage --json parses"            '"$ROOT/host/bin/brain" usage --json | jq -e .state >/dev/null'
@@ -339,12 +371,15 @@ check "brain usage --json state=tight"       '"$ROOT/host/bin/brain" usage --jso
 check "brain usage --json exposes windows"   '"$ROOT/host/bin/brain" usage --json | jq -e ".anthropic.windows.weekly_scoped_fable == 66" >/dev/null'
 check "brain usage table renders"            '"$ROOT/host/bin/brain" usage 2>/dev/null | grep -q "weekly_scoped_fable"'
 # Grok/Kimi have no reachable usage endpoint and must never be given a number;
-# ChatGPT does, and must show the real one.
+# ChatGPT and Muse do, and must show the real one.
 link xai
 check "grok/kimi never given a number"       '! "$ROOT/host/bin/brain" usage 2>/dev/null | grep -E "^  (grok|kimi) " | grep -q "%"'
 check "grok says so explicitly"              '"$ROOT/host/bin/brain" usage 2>/dev/null | grep "^  grok " | grep -q "not measurable"'
 check "chatgpt headroom reported for real"   'probe codex-ok.hdr; "$ROOT/host/bin/brain" usage 2>/dev/null | grep -q "chatgpt.*headroom 98%"'
 check "chatgpt in --json"                    '"$ROOT/host/bin/brain" usage --json | jq -e ".chatgpt.headroom == 98" >/dev/null'
+check "muse headroom reported for real"      'printf "{\"api_key\":\"k\",\"subs_tier_name\":\"Muse Code High Usage\",\"type\":\"meta\"}\n" > "$BRAIN_AUTH_DIR/meta-test.json"; muse_probe 10 30; "$ROOT/host/bin/brain" usage 2>/dev/null | grep -q "muse.*headroom 70%"'
+check "muse in --json"                       '"$ROOT/host/bin/brain" usage --json | jq -e ".muse.headroom == 70 and .muse.window_used == 10" >/dev/null'
+check "unread muse is stated, not faked"     'rm -f "$BRAIN_MUSE_STATE"; "$ROOT/host/bin/brain" usage 2>/dev/null | grep "^  muse " | grep -q "not read yet"'
 check "probe off is stated, not faked"       'setting_set USAGE_PROBE off; rm -f "$BRAIN_CODEX_STATE"; "$ROOT/host/bin/brain" usage 2>/dev/null | grep -q "probe off"'
 setting_set USAGE_PROBE on
 check "brain usage override writes expiry"   '"$ROOT/host/bin/brain" usage override 5 >/dev/null && usage_override_active'
