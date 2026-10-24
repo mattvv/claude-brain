@@ -12,7 +12,7 @@ trace, and they should never be surprised by a change to their computer.
 
 A personal AI server: Claude Code running around the clock on a machine they
 own (or a cloud VM), reachable from the Claude app on their phone, with a local
-router that can also consult Grok, GPT and Kimi on their own subscriptions.
+router that can also consult Grok, GPT, Kimi and Meta Muse on their own subscriptions.
 
 Two facts that matter for the install:
 
@@ -114,11 +114,14 @@ brain auth start chatgpt        # prints a URL (+ a device code)
 ```
 
 - Relay the URL and code. They open it on any device and approve.
-- ChatGPT and Muse complete on their own (device code): poll
-  `brain auth check <vendor>` every ~15s, up to 2 minutes.
-- Grok and Kimi land on a `localhost` address that won't load. Ask them to copy
-  that address out of the browser bar and paste it to you, then:
-  `brain auth paste grok '<that-url>'`.
+- ChatGPT, Grok, Kimi and Muse are all device-code logins and complete on their
+  own: poll `brain auth check <vendor>` every ~15s, up to 2 minutes.
+- Muse needs a **Muse Code** plan (dev.meta.ai), not the consumer Muse plan from
+  meta.com, on an age-verified Meta Model API account — otherwise the first request
+  fails with "Age Requirement Not Met".
+- Only if a login lands on a `localhost` address that won't load: ask them to copy
+  it out of the browser bar and paste it to you, then
+  `brain auth paste <vendor> '<that-url>'`.
 - GitHub: `brain auth github` (device flow, same pattern).
 
 Confirm each one with `brain auth check <vendor>`.

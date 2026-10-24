@@ -1287,7 +1287,7 @@ cmd_auth_start() {
 
   info "open this link in any browser and approve:"
   printf '\n  %s\n\n' "$url"
-  if [ "$vendor" = chatgpt ] || [ "$vendor" = muse ] || printf '%s' "$url" | grep -qi device; then
+  if printf '%s' "$url" | grep -qi device || grep -qi 'enter this code' "$log" 2>/dev/null; then
     # Device-style flow: completes on its own once approved.
     { sed -n 's/.*enter this code: *\([^[:space:]]*\).*/\1/p' "$log"
       grep -oE '[A-Z0-9]{4,}-[A-Z0-9]{4,}' "$log"; } 2>/dev/null | head -1 \
@@ -1364,12 +1364,12 @@ cmd_auth() {
       ;;
     grok)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
-      info "Grok login: open the printed URL in your laptop browser"
+      info "Grok device login: you'll get a URL + code to enter on any browser"
       "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --xai-login --no-browser
       ;;
     kimi)
       [ -x "$BRAIN_PROXY_BIN" ] || die "proxy not built — run: brain setup"
-      info "Kimi login: open the printed URL in your laptop browser"
+      info "Kimi device login: you'll get a URL + code to enter on any browser"
       "$BRAIN_PROXY_BIN" --config "$BRAIN_PROXY_CONFIG" --kimi-login --no-browser
       ;;
     muse)

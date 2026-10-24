@@ -23,7 +23,8 @@ your brain machine; both are on by default.
   │ Claude app        │ ◄───────────────► │ Claude Code (always on)    │
   │ claude.ai/code    │                   │   ├── brain-grok  ─┐       │
   └──────────────────┘                   │   ├── brain-sol   ─┼─► model router
-                                          │   ├── brain-kimi  ─┘  (Grok/GPT/Kimi)
+                                          │   ├── brain-kimi   │  (GPT/Grok/Kimi/Muse)
+                                          │   ├── brain-muse  ─┘       │
                                           │   └── your GitHub repos    │
                                           └────────────────────────────┘
 ```
@@ -85,7 +86,8 @@ guessing silently.
 - A **Claude subscription** (Pro or Max) — this is the brain itself. Required.
 - A computer to run it on, from the table above. Required.
 - Optional, each adds a model to your brain: a **ChatGPT** subscription, a **Grok** (X.AI)
-  subscription, a **Kimi** subscription, a **Meta Muse Code** subscription.
+  subscription, a **Kimi** subscription, a **Meta Muse Code** subscription (the developer
+  plan from dev.meta.ai — the consumer Muse plan on meta.com doesn't include API access).
 - Optional: a **GitHub account**, if you want your brain to read and write your code.
 
 ## Your first phone session
@@ -104,7 +106,7 @@ to the router and brings the answer back.
 
 **Your brain manages itself.** From that same phone session you can just ask it to:
 - *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
-- *"link my Grok account"* — same, you tap the link, then paste the address it lands on back into chat;
+- *"link my Grok account"* (or Kimi, or Muse) — same: you tap the link and approve the code;
 - *"install &lt;some tool&gt;"* or *"add the &lt;X&gt; MCP server"* — it installs and configures it;
 - *"update yourself"* — it pulls the latest claude-brain release.
 
@@ -220,7 +222,7 @@ Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
 
 One brain can hold more than one set of logins. Your own Claude and ChatGPT stay the
 `default` set; an extra set — say `work` — gets its own Claude login, its own ChatGPT/Grok/
-Kimi links, its own router process, token and port, and its own usage numbers. Repos are
+Kimi/Muse links, its own router process, token and port, and its own usage numbers. Repos are
 pinned to a set, so a work repo's phone sessions run on the work Claude account and its
 `brain-*` consultants bill the work ChatGPT account — never yours, and never by accident.
 
@@ -242,7 +244,7 @@ Run them on the brain machine — at its own keyboard, over SSH, or by asking a 
 to run them for you.
 
 **What's `brain multi`?** In your normal session, Claude is always the brain and other
-models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi
+models are consultants. `brain multi` flips that: agents *run natively as* GPT/Grok/Kimi/Muse
 with full tool access, parable-style. The trade-off: phone control (Remote Control) is
 technically impossible in that mode, so you use it at a terminal.
 
@@ -356,7 +358,7 @@ What it does:
   small, locally-gathered pack to a *cheap* model and returns one dense, cited answer — so the
   expensive brain never reads a pile of files just to orient itself. The cheap model is a
   configurable fallback chain (`[explore] models`, default `gpt-6-luna,grok-4.5`).
-- **Cheaper consultations.** When your brain asks Grok/GPT/Kimi about files, it hands over the
+- **Cheaper consultations.** When your brain asks Grok/GPT/Kimi/Muse about files, it hands over the
   *paths* (`brain-ask --context-file`) so the file bytes never fill the brain's *own* context
   twice, and it can ask the consultant for a terser answer (`--response debug|concise|…`) at the
   right effort for the vendor.
