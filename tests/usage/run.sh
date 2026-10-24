@@ -359,7 +359,7 @@ check "exhausted muse marked reserve"        'grep -q "muse reserve" "$BRAIN_USA
 check "exhausted muse dropped from lanes"    '! usage_rank_lanes | grep -q muse'
 printf 'event: response.completed\ndata: {"type":"response.completed"}\n\n' > "$FIX/muse-none.sse"
 cp "$BRAIN_MUSE_STATE" "$FIX/muse-before"
-check "no usage event -> state untouched"    '! BRAIN_MUSE_FIXTURE="$FIX/muse-none.sse" usage_refresh_muse && cmp -s "$BRAIN_MUSE_STATE" "$FIX/muse-before"'
+check "no usage event -> state untouched"    '! BRAIN_MUSE_FIXTURE="$FIX/muse-none.sse" usage_refresh_muse && [ "$(cat "$BRAIN_MUSE_STATE")" = "$(cat "$FIX/muse-before")" ]'
 check "muse key never written to state"      '! grep -rq faketoken "$BRAIN_USAGE_DIR"'
 rm -f "$BRAIN_AUTH_DIR/meta-test.json" "$BRAIN_MUSE_STATE"
 usage_refresh_vendors

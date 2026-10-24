@@ -29,7 +29,8 @@ jobs:
           actual=$(sha256sum host/proxy/patches/SERIES | cut -d' ' -f1)
           test -n "$pinned"
           test "$pinned" = "$actual"
-          (cd host/proxy/patches && sha256sum -c SERIES)
+          # An empty series (stock upstream) has nothing to verify; sha256sum -c rejects it.
+          if [ -s host/proxy/patches/SERIES ]; then (cd host/proxy/patches && sha256sum -c SERIES); fi
       - name: compat symlink still resolves
         # Installs made before the droplet/ -> host/ rename run
         # $REPO/droplet/install.sh after `git pull`. If this breaks, `brain
