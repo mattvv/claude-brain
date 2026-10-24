@@ -341,7 +341,7 @@ What changes in a session:
 
 - **It starts from a playbook.** Claude classifies the task (investigation, bug fix, feature, refactor, perf, prototype) and copies that playbook's steps into its todo list. It reads how the system works before changing it, names the data shape before writing code, and makes the smallest complete change.
 - **It proves the result on the real app.** "The tests pass" isn't the bar. For anything a user sees, Claude drives the app through the repo's verify skill and keeps screenshots and logs. Pure logic gets headless tests.
-- **Risky calls get a panel.** A contested design or a risky diff goes to two other model families (`brain-sol`, `brain-grok`) alongside Claude's own review. Agreement is signal; disagreement is a finding. Panels run through the brain's router, so they respect your usage reserve and show up in the consult statusline.
+- **Risky calls get a panel.** A contested design or a risky diff goes to three other model families (`brain-sol`, `brain-grok`, `brain-muse`) alongside Claude's own review. Agreement is signal; disagreement is a finding. Panels run through the brain's router, so they respect your usage reserve and show up in the consult statusline.
 - **Replies carry evidence.** Every claim is labelled measured, inferred or guess. Anything that couldn't be verified is named, along with why.
 
 ### Verify skills

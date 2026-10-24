@@ -7,8 +7,8 @@ Work verification-first, in the style of Lauren Tan's pstack. For non-trivial en
 - Prove it on the real thing, not "tests pass": run `brain verify` (the repo's
   `.claude/skills/verify-*/` skill) for anything a user sees; headless tests for pure logic.
   No verify skill? Offer to create one.
-- Contested design or risky diff: same prompt to two other families (`brain-sol`, `brain-grok`)
-  plus your own read; agreement is signal, disagreement is a finding.
+- Contested design or risky diff: same prompt to three other families (`brain-sol`,
+  `brain-grok`, `brain-muse`) plus your own read; agreement is signal, disagreement a finding.
 - Reply with evidence: each claim labelled measured, inferred, or guess; name what you could not
   verify and why. Pause before irreversible actions; otherwise proceed and report.
 
@@ -22,7 +22,7 @@ pstack is Lauren Tan's (@poteto) skill set from her work at Cursor
 (https://github.com/cursor/plugins/tree/main/pstack, MIT); open-pstack
 (https://github.com/ericlitman/open-pstack) ports it to Claude Code and Codex. This mode keeps
 its working method and swaps its model plumbing for claude-brain's: panels and second opinions
-go through the `brain-*` consultants (proxy, usage guard, consult statusline), never through a
+go through the `brain-*` consultants (`brain-sol`, `brain-grok`, `brain-muse`; proxy, usage guard, consult statusline), never through a
 plugin's own CLI runner. If the open-pstack plugin is installed, its skills (`architect`,
 `interrogate`, `tdd`, `create-verification-skill`, ...) are fine to use; route any model role
 they assign to the matching `brain-*` agent instead of the codex/grok CLIs.
@@ -67,8 +67,9 @@ list as `skip: <reason>`.
 ## Panels
 
 - Second opinion: the same prompt to a different family than produced the work.
-- Interrogate (contested design or risky diff): `brain-sol` and `brain-grok` in parallel, each
-  asked to break it, plus your own review. Consolidate: agreement is high signal; a lone finding
+- Interrogate (contested design or risky diff): `brain-sol`, `brain-grok` and `brain-muse` in
+  parallel, each asked to break it, plus your own review. A vendor that isn't linked drops out
+  of the panel (say so); never substitute a second lane from a family already on it. Consolidate: agreement is high signal; a lone finding
   gets checked against the code before you act on it.
 - Arena (several viable designs): sketch two or three, compare on the axes that matter, graft
   the best parts. Use `brain-luna` for the mechanical drafts.
