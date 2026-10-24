@@ -28,6 +28,8 @@
 #   brain config     settings: consult foreground|background (watch brain-*
 #                    consultants work live, or run them in the background)
 #   brain usage      subscription headroom + who can take work right now
+#   brain verify     run this repo's verify skill (.claude/skills/verify-*): doctor
+#                    by default, other args pass through (pstack mode)
 #   brain consult    live consultation progress: status | log | watch
 #   brain update     pull latest claude-brain + rebuild what changed
 #   brain uninstall  remove claude-brain and restore your Claude Code config
@@ -115,6 +117,7 @@ install_routing() {
   install_ops_block
   install_usage_block
   install_consult_block
+  install_pstack_block
 }
 
 install_usage_block() {
@@ -201,6 +204,15 @@ install_consult_block() {
   local mode
   mode="$(setting_get CONSULT_VISIBILITY background)"
   install_block "$BRAIN_REPO_DIR/host/claude/consult-$mode.md" consult
+}
+
+# pstack mode: verification-first working method (opt-in via 'brain config pstack').
+install_pstack_block() {
+  if [ "$(setting_get PSTACK off)" = on ]; then
+    install_block "$BRAIN_REPO_DIR/host/claude/pstack-mode.md" pstack
+  else
+    remove_block pstack
+  fi
 }
 
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
@@ -1683,6 +1695,7 @@ cmd_setup() {
     brain update     get the latest claude-brain
     brain uninstall  remove claude-brain and restore your Claude Code config
     brain explore "question"   cheap-model repo navigation (discovery only)
+    brain verify [args]        run this repo's verify skill (pstack mode; default: doctor)
 
 CHEAT
   if [ -t 0 ] && setup_yn "Start your brain session now?"; then
@@ -1796,6 +1809,33 @@ cmd_recall() {
   local launcher
   launcher="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/brain-compress"
   exec "$launcher" recall "$@"
+}
+
+# ------------------------------------------------------------------- verify
+# Run the current repo's verification skill (pstack style): a project-local
+# .claude/skills/verify-<app>/scripts/verify.sh that launches and drives the
+# real app and keeps evidence. Defaults to its read-only doctor.
+cmd_verify() {
+  local root found="" n=0 f
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+  for f in "$root"/.claude/skills/verify-*/scripts/verify.sh; do
+    [ -x "$f" ] || continue
+    n=$((n+1)); found="$f"
+  done
+  if [ "$n" -eq 0 ]; then
+    die "no verify skill in $root (.claude/skills/verify-*/scripts/verify.sh) — ask Claude to create one"
+  fi
+  if [ "$n" -gt 1 ] && [ -z "${BRAIN_VERIFY_SKILL:-}" ]; then
+    warn "several verify skills; pick one with BRAIN_VERIFY_SKILL=<name>:"
+    for f in "$root"/.claude/skills/verify-*/scripts/verify.sh; do
+      printf '  %s\n' "$(basename "$(dirname "$(dirname "$f")")")"
+    done
+    exit 2
+  fi
+  [ -z "${BRAIN_VERIFY_SKILL:-}" ] || found="$root/.claude/skills/$BRAIN_VERIFY_SKILL/scripts/verify.sh"
+  [ -x "$found" ] || die "not an executable verify script: $found"
+  [ "$#" -gt 0 ] || set -- doctor
+  exec "$found" "$@"
 }
 
 # ------------------------------------------------------------------- config
@@ -2028,6 +2068,7 @@ cmd_config() {
       printf '  routing    = %s   credits %s   (brain config routing <reserve|claude-first|consultant-first>)\n' \
         "$(routing_strategy)" "$(routing_credits)"
       printf '  autoupdate = %s   (brain config autoupdate <on|off>)\n' "$(setting_get AUTOUPDATE off)"
+      printf '  pstack     = %s   (brain config pstack <on|off>)\n' "$(setting_get PSTACK off)"
       local k
       for k in ROUTING_STRATEGY ROUTING_CREDITS USAGE_ENFORCE USAGE_RESERVE_PCT \
                USAGE_ADVISORY_PCT USAGE_TTL USAGE_PROBE USAGE_PROBE_TTL; do
@@ -2149,6 +2190,22 @@ cmd_config() {
           ;;
       esac
       ;;
+    pstack)
+      case "$val" in
+        '')  setting_get PSTACK off ;;
+        on|off)
+          setting_set PSTACK "$val"
+          install_pstack_block
+          if [ "$val" = on ]; then
+            ok "pstack mode on: verification-first playbooks, brain-* panels, evidence in replies"
+            info "drive a repo's app with 'brain verify'; applies to new Claude sessions"
+          else
+            ok "pstack mode off"
+          fi
+          ;;
+        *) die "usage: brain config pstack <on|off>" ;;
+      esac
+      ;;
     scope)
       case "$val" in
         '') setting_get SCOPE machine ;;
@@ -2163,7 +2220,7 @@ cmd_config() {
       esac
       ;;
     *)
-      die "usage: brain config [consult <foreground|background>|scope <machine|workspace>|statusline <on|off>|usage ...|routing ...] [--account NAME]"
+      die "usage: brain config [consult <foreground|background>|pstack <on|off>|scope <machine|workspace>|statusline <on|off>|usage ...|routing ...] [--account NAME]"
       ;;
   esac
 }
@@ -2247,6 +2304,7 @@ cmd_uninstall() {
   remove_block routing
   remove_block ops
   remove_block consult
+  remove_block pstack
 
   # Un-register the hooks and hand the statusline back.
   local settings="$HOME/.claude/settings.json" backup="$BRAIN_STATE_DIR/settings.json.pre-brain"
@@ -2330,6 +2388,7 @@ account_unwire() {
   remove_block ops
   remove_block usage
   remove_block consult
+  remove_block pstack
   if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
     jq --arg managed "$BRAIN_MANAGED_HOOKS" --arg default_md "$HOME/.claude/CLAUDE.md" '
       def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];
@@ -2862,6 +2921,7 @@ case "${1:-rc}" in
   recall)    shift; cmd_recall "$@" ;;
   usage)     shift; cmd_usage "$@" ;;
   config)    shift; cmd_config "$@" ;;
+  verify)    shift; cmd_verify "$@" ;;
   update)    cmd_update ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   help|-h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;

@@ -33,6 +33,7 @@ budget routing-multi.md     2800
 budget usage-policy.md      1000
 budget consult-background.md 1000
 budget consult-foreground.md 1000
+budget pstack-mode.md       1400
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
