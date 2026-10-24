@@ -12,6 +12,7 @@ brain auth anthropic   # Claude (the main brain)
 brain auth chatgpt     # GPT models
 brain auth grok
 brain auth kimi
+brain auth muse        # Meta Muse Code (device code)
 brain auth github
 ```
 

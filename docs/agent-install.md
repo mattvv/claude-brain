@@ -50,7 +50,7 @@ time. Recommended options are marked.
    - *its own folder* (recommended) — it works in one directory and asks before
      going outside. Ask for the folder, default `~/brain-workspace`.
    - *the whole machine* — it administers the computer like the cloud version does
-3. **Which accounts?** Claude is required. ChatGPT, Grok, Kimi and GitHub are each
+3. **Which accounts?** Claude is required. ChatGPT, Grok, Kimi, Muse and GitHub are each
    optional, each needs a subscription they already pay for, and each can be added
    later in ten seconds. Don't push.
 4. **Start automatically after a reboot?** (recommended yes)
@@ -114,8 +114,8 @@ brain auth start chatgpt        # prints a URL (+ a device code)
 ```
 
 - Relay the URL and code. They open it on any device and approve.
-- ChatGPT completes on its own: poll `brain auth check chatgpt` every ~15s, up to
-  2 minutes.
+- ChatGPT and Muse complete on their own (device code): poll
+  `brain auth check <vendor>` every ~15s, up to 2 minutes.
 - Grok and Kimi land on a `localhost` address that won't load. Ask them to copy
   that address out of the browser bar and paste it to you, then:
   `brain auth paste grok '<that-url>'`.

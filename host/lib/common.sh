@@ -275,6 +275,7 @@ vendor_record_prefix() {
     chatgpt) echo codex ;;
     grok)    echo xai ;;
     kimi)    echo kimi ;;
+    muse)    echo meta ;;
     claude)  echo claude ;;
     *)       return 1 ;;
   esac
@@ -292,7 +293,7 @@ vendor_linked() {
 
 # The consultant vendors usage-aware routing can offload onto. Anthropic is
 # deliberately absent: it is what the reserve protects, never a fallback.
-BRAIN_CONSULT_VENDORS="chatgpt grok kimi"
+BRAIN_CONSULT_VENDORS="chatgpt grok kimi muse"
 
 # ---- update availability (shared by the statusline, the session hook, and `brain status`) ----
 # One line, "behind=N latest=vX.Y.Z checked_at=EPOCH", written atomically. The
@@ -431,12 +432,14 @@ claude_bin() {
 
 # ---- subscription usage (shared by the statusline, hooks, and `brain usage`) ----
 #
-# Two vendors report real headroom, by quite different means:
+# Three vendors report real headroom, by quite different means:
 #
 #   Anthropic — GET /api/oauth/usage, per-window utilization for the OAuth
 #     subscription the session itself is spending. Free.
 #   ChatGPT/Codex — `x-codex-*` response headers, which only ride along on a real
 #     POST to /backend-api/codex/responses. See usage_refresh_codex below.
+#   Meta Muse — a `response.subscription_usage` stream event on a real POST to
+#     /v1/responses. See usage_refresh_muse below.
 #
 # Grok and Kimi expose nothing reachable, so they stay "unknown = available";
 # their only negative signal is a `.cds` cooldown record written by the router
@@ -559,6 +562,8 @@ usage_refresh_vendors() {
     elif [ "$v" = "chatgpt" ] && [ "$(usage_codex_state)" = "critical" ] \
          && { [ "$(routing_strategy)" != claude-first ] || [ "$(routing_codex_subscription_state)" = spent ]; }; then
       # Claude-first spends the remaining ChatGPT subscription before credits.
+      printf '%s reserve\n' "$v" >> "$tmp"
+    elif [ "$v" = "muse" ] && [ "$(usage_muse_state)" = "critical" ]; then
       printf '%s reserve\n' "$v" >> "$tmp"
     else
       printf '%s linked\n' "$v" >> "$tmp"
@@ -706,6 +711,12 @@ usage_refresh_all() {
   if [ $((codex_now - codex_last)) -ge "$(usage_probe_ttl)" ]; then
     usage_refresh_codex || true
   fi
+  local muse_last
+  muse_last="$(cat "$BRAIN_MUSE_STAMP" 2>/dev/null || echo 0)"
+  case "$muse_last" in ''|*[!0-9]*) muse_last=0 ;; esac
+  if vendor_linked muse && [ $((codex_now - muse_last)) -ge "$(usage_probe_ttl)" ]; then
+    usage_refresh_muse || true
+  fi
   usage_refresh_vendors
   usage_refresh_anthropic || true
   # Stamp regardless of outcome so a hard-down endpoint backs off instead of
@@ -759,7 +770,7 @@ usage_reset_human() {
 usage_agent_is_anthropic() {
   case "$1" in
     brain-fable)                              return 0 ;;
-    brain-astra|brain-sol|brain-terra|brain-luna|brain-grok|brain-kimi) return 1 ;;
+    brain-astra|brain-sol|brain-terra|brain-luna|brain-grok|brain-kimi|brain-muse) return 1 ;;
     brain-*)                                  return 1 ;;
     '')                                       return 1 ;;
     *)                                        return 0 ;;
@@ -854,12 +865,12 @@ usage_gate() {
   lanes="$(usage_rank_lanes 2>/dev/null || true)"
 
   local where="Claude subscription at ${headroom}% headroom on ${bind}${resets:+, resets in $resets}"
-  local alt="brain-astra / brain-sol / brain-grok / brain-terra / brain-kimi"
+  local alt="brain-astra / brain-sol / brain-grok / brain-terra / brain-kimi / brain-muse"
   # Name the alternative's actual headroom when we have it — "go use ChatGPT"
   # is far more persuasive with "it is at 98%" attached.
   local cx
   if cx="$(usage_codex_field headroom 2>/dev/null)" && [ "$(usage_codex_state)" != "critical" ]; then
-    alt="brain-astra / brain-sol / brain-terra / brain-luna (ChatGPT is at ${cx}% headroom), or brain-grok / brain-kimi"
+    alt="brain-astra / brain-sol / brain-terra / brain-luna (ChatGPT is at ${cx}% headroom), or brain-grok / brain-kimi / brain-muse"
   fi
 
   if [ "$claude_first" = 1 ]; then
@@ -1015,6 +1026,98 @@ usage_refresh_codex() {
     "$([ "$credits" = "True" ] && printf yes || printf no)" > "$tmp"
   mv "$tmp" "$BRAIN_CODEX_STATE"
   return 0
+}
+
+# ---- Meta Muse headroom ----
+#
+# Muse Code ends every streamed /responses turn with a `response.subscription_usage`
+# event: used_percent for the five-hour window and the week, each with resets_at.
+# Our router strips that event before it reaches loopback clients, so — as with
+# Codex — the only way to read it is one minimal request of our own, on the same
+# probe switch and TTL. The minted Muse Code key is sent on stdin, never argv.
+BRAIN_MUSE_STATE="$BRAIN_USAGE_DIR/muse.txt"
+BRAIN_MUSE_STAMP="$BRAIN_USAGE_DIR/.last-muse"
+# Pinned to match the router's own Meta client.
+BRAIN_MUSE_UA="muse-build/1.3.0 (interactive; macos-aarch64; build ac7280f2aca67769d1455a8847bb502b617d50f6)"
+BRAIN_MUSE_PROBE_MODEL="${BRAIN_MUSE_PROBE_MODEL:-muse-spark-1.3}"
+
+usage_muse_field() {
+  [ -f "$BRAIN_MUSE_STATE" ] || return 1
+  local v
+  v="$(awk -v k="$1" '{for(i=1;i<=NF;i++){split($i,p,"=");if(p[1]==k){print p[2];exit}}}' \
+    "$BRAIN_MUSE_STATE")" || return 1
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
+
+usage_refresh_muse() {
+  usage_probe_enabled || return 1
+  local rec key base tier body now rc=0
+  now="$(date +%s)"
+  rec="$(ls "$BRAIN_AUTH_DIR"/meta-*.json 2>/dev/null | head -1)"
+  [ -n "$rec" ] || return 1
+  body="$BRAIN_USAGE_DIR/.muse-body.$$"
+  if [ -n "${BRAIN_MUSE_FIXTURE:-}" ]; then
+    cp "$BRAIN_MUSE_FIXTURE" "$body" 2>/dev/null || rc=1
+  else
+    key="$(jq -r '.api_key // empty' "$rec" 2>/dev/null || true)"
+    # No minted key yet: the router mints one on first use; try again next time.
+    [ -n "$key" ] || return 1
+    base="$(jq -r '.base_url // empty' "$rec" 2>/dev/null || true)"
+    base="${base:-https://api.meta.ai/v1}"
+    printf 'Authorization: Bearer %s\nX-Client-Id: tbh:tui\nUser-Agent: %s\nContent-Type: application/json\nAccept: text/event-stream\n' \
+        "$key" "$BRAIN_MUSE_UA" \
+      | curl -sS -m 60 -N -H @- -o "$body" \
+          --data-binary "{\"model\":\"$BRAIN_MUSE_PROBE_MODEL\",\"input\":\"hi\",\"stream\":true,\"store\":false,\"max_output_tokens\":16,\"reasoning\":{\"effort\":\"minimal\"}}" \
+          "${base%/}/responses" >/dev/null 2>&1 || rc=$?
+  fi
+  printf '%s\n' "$now" > "$BRAIN_MUSE_STAMP"
+  local line
+  line="$(sed -n 's/^data:[[:space:]]*//p' "$body" 2>/dev/null \
+    | jq -r 'select(.type == "response.subscription_usage") | .subscription
+             | "\(.window.used_percent // "x") \(.weekly.used_percent // "x") \(.window.resets_at // 0) \(.weekly.resets_at // 0)"' 2>/dev/null \
+    | tail -1)"
+  rm -f "$body"
+  tier="$(jq -r '.subs_tier_name // "unknown"' "$rec" 2>/dev/null | tr -c 'A-Za-z0-9\n' '_' | sed 's/^Muse_Code_//')"
+
+  local window weekly w_reset k_reset
+  read -r window weekly w_reset k_reset <<EOF_MUSE
+$line
+EOF_MUSE
+  # Percentages may arrive as floats; keep the integer part.
+  window="${window%%.*}"; weekly="${weekly%%.*}"
+  w_reset="${w_reset%%.*}"; k_reset="${k_reset%%.*}"
+  case "$window" in ''|*[!0-9]*) return 1 ;; esac
+  case "$weekly" in ''|*[!0-9]*) weekly=0 ;; esac
+  [ "$window" -le 100 ] && [ "$weekly" -le 100 ] || return 1
+  case "$w_reset" in ''|*[!0-9]*) w_reset=0 ;; esac
+  case "$k_reset" in ''|*[!0-9]*) k_reset=0 ;; esac
+
+  local used="$window" resets_in=0
+  [ "$weekly" -gt "$used" ] && used="$weekly"
+  [ "$w_reset" -gt "$now" ] && resets_in=$((w_reset - now))
+
+  local tmp="$BRAIN_MUSE_STATE.tmp.$$"
+  printf 'updated_at=%s headroom=%s window=%s weekly=%s plan=%s resets_in=%s weekly_resets_at=%s\n' \
+    "$now" "$((100 - used))" "$window" "$weekly" "${tier:-unknown}" "$resets_in" "$k_reset" > "$tmp"
+  mv "$tmp" "$BRAIN_MUSE_STATE"
+  return 0
+}
+
+# ok | tight | critical | unknown for Muse, on the same thresholds as Claude.
+usage_muse_state() {
+  local h updated now age
+  h="$(usage_muse_field headroom 2>/dev/null || true)"
+  updated="$(usage_muse_field updated_at 2>/dev/null || true)"
+  case "$updated" in ''|*[!0-9]*) printf 'unknown\n'; return 0 ;; esac
+  case "$h" in ''|*[!0-9]*) printf 'unknown\n'; return 0 ;; esac
+  now="$(date +%s)"; age=$((now - updated))
+  # The five-hour window can bind, so a sample goes stale like Anthropic's does.
+  if [ "$age" -gt 18000 ] || [ "$age" -lt -300 ]; then printf 'unknown\n'; return 0; fi
+  if   [ "$h" -le "$(usage_reserve_pct)" ];  then printf 'critical\n'
+  elif [ "$h" -le "$(usage_advisory_pct)" ]; then printf 'tight\n'
+  else printf 'ok\n'
+  fi
 }
 
 # ok | tight | critical | unknown for ChatGPT, on the same thresholds as Claude.

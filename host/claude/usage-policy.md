@@ -1,7 +1,7 @@
 # claude-brain usage-aware routing
 
 `brain usage` shows real Claude headroom per window and which consultant vendors can take
-work. Anthropic and ChatGPT report genuine numbers; Grok and Kimi expose none, so never
+work. Anthropic, ChatGPT and Muse report genuine numbers; Grok and Kimi expose none, so never
 invent a figure for them.
 
 __ROUTING_STRATEGY__
@@ -23,7 +23,7 @@ not spend the others.
 `brain usage` reports the real numbers: per-window utilisation, which window is currently
 binding, when it resets, and which consultant vendors are linked and able to take work.
 
-Anthropic and ChatGPT both report genuine headroom, so quote those figures freely. Grok and
+Anthropic, ChatGPT and Muse all report genuine headroom, so quote those figures freely. Grok and
 Kimi expose no usage endpoint and are shown as *linked, headroom not measurable* — never
 invent a number for them. Under `reserve`, a consultant vendor at its own reserve stops
 being offered; `claude-first` can use ChatGPT down to zero subscription headroom. Check

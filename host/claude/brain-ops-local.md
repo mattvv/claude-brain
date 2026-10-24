@@ -29,10 +29,10 @@ tell the user it loads on the next session restart.
 
 **Link AI accounts yourself** when the user asks (e.g. "connect my ChatGPT"). Run these
 with the Bash tool and relay the URL to the user in chat:
-1. `brain auth start <chatgpt|grok|kimi>` — prints a login URL (ChatGPT also prints a
+1. `brain auth start <chatgpt|grok|kimi|muse>` — prints a login URL (ChatGPT and Muse also print a
    device code). Show the user the URL (and code) and ask them to open it on any device
    and approve.
-2. ChatGPT finishes on its own: poll `brain auth check chatgpt` (every ~15s, up to 2 min).
+2. ChatGPT and Muse finish on their own: poll `brain auth check <vendor>` (every ~15s, up to 2 min).
 3. Grok/Kimi: after approving, the user's browser lands on a `localhost` address that
    won't load. Ask them to copy that address and paste it to you, then run
    `brain auth paste <vendor> '<pasted-url>'`.
@@ -110,7 +110,7 @@ verbose output while keeping the exact original recoverable.
 
 **Watch the subscription budget**: `brain usage` shows how much of the Claude subscription
 is left (per window, which one is binding, when it resets) and which consultant vendors can
-take work. Anthropic and ChatGPT report real numbers (ChatGPT's costs one ~21-token probe,
+take work. Anthropic, ChatGPT and Muse report real numbers (ChatGPT's and Muse's each cost one tiny probe,
 disable with `brain config usage probe off`); Grok and Kimi have no usage endpoint, so never
 quote a headroom figure for them. As Claude headroom falls, route implementation and bulk
 reading through `brain-*` consultants instead of doing it in-session; at the reserve the

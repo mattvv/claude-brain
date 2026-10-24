@@ -8,7 +8,7 @@
 # so a Claude session or a script can drive the whole thing:
 #
 #   install.sh --here [--scope machine|workspace] [--workspace DIR]
-#              [--link chatgpt,grok,kimi,github] [--autostart] [--yes] [--plan]
+#              [--link chatgpt,grok,kimi,muse,github] [--autostart] [--yes] [--plan]
 #   install.sh --ssh user@host [same flags]
 #   install.sh --digitalocean [--name N] [--region nyc3] [--size s-1vcpu-2gb]
 #
@@ -166,7 +166,7 @@ if [ "$PLAN" -eq 0 ] && [ "$ASSUME_YES" -eq 0 ] && [ -z "$LINK" ]; then
   say ""
   say "Claude is required and you'll sign in during setup."
   say "Which other accounts should your brain be able to use? (all optional)"
-  reply="$(ask "  Comma-separated from chatgpt,grok,kimi,github [none]: " "")"
+  reply="$(ask "  Comma-separated from chatgpt,grok,kimi,muse,github [none]: " "")"
   LINK="$reply"
 fi
 
