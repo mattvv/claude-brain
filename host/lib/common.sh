@@ -456,6 +456,16 @@ BRAIN_USAGE_STAMP="$BRAIN_USAGE_DIR/.last-fetch"
 BRAIN_USAGE_LOCK="$BRAIN_USAGE_DIR/.refresh.lock"
 BRAIN_USAGE_OVERRIDE_FILE="$BRAIN_USAGE_DIR/OVERRIDE"
 BRAIN_CLAUDE_CREDS="${BRAIN_CLAUDE_CREDS:-$BRAIN_CLAUDE_DIR/.credentials.json}"
+# On macOS Claude Code keeps its login in the Keychain, not in .credentials.json.
+# A non-default config dir gets the first 8 hex of sha256(dir) appended.
+# Set to empty to skip the Keychain lookup.
+if [ -z "${BRAIN_CLAUDE_KEYCHAIN_SERVICE+set}" ]; then
+  if [ "$BRAIN_CLAUDE_DIR" = "$HOME/.claude" ]; then
+    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials"
+  else
+    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials-$(printf '%s' "$BRAIN_CLAUDE_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
+  fi
+fi
 BRAIN_USAGE_ENDPOINT="${BRAIN_USAGE_ENDPOINT:-https://api.anthropic.com/api/oauth/usage}"
 
 # A cached sample older than the window it describes is meaningless.
@@ -629,8 +639,19 @@ JQ
 
 # Fetch Anthropic usage and rewrite summary.txt. Returns 1 on any failure,
 # leaving the previous sample in place for `usage_state` to age out.
+# Print Claude Code's OAuth credentials JSON: the file, else the macOS Keychain.
+usage_claude_creds_json() {
+  if [ -f "$BRAIN_CLAUDE_CREDS" ]; then
+    cat "$BRAIN_CLAUDE_CREDS" 2>/dev/null
+  elif [ -n "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" ] && command -v security >/dev/null 2>&1; then
+    security find-generic-password -a "$USER" -s "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" -w 2>/dev/null
+  else
+    return 1
+  fi
+}
+
 usage_refresh_anthropic() {
-  local token expires now body_file code rc=0 fields reason=""
+  local token expires creds now body_file code rc=0 fields reason=""
   now="$(date +%s)"
   body_file="$BRAIN_USAGE_DIR/.body.$$"
   : > "$body_file" 2>/dev/null || true
@@ -639,11 +660,12 @@ usage_refresh_anthropic() {
     # Test path: read a canned payload instead of talking to the network.
     cp "$BRAIN_USAGE_FIXTURE" "$body_file" 2>/dev/null || reason="fixture-unreadable"
     code=200
-  elif [ ! -f "$BRAIN_CLAUDE_CREDS" ]; then
+  elif ! creds="$(usage_claude_creds_json)"; then
     reason="no-credentials"
   else
-    token="$(jq -r '.claudeAiOauth.accessToken // empty' "$BRAIN_CLAUDE_CREDS" 2>/dev/null || true)"
-    expires="$(jq -r '.claudeAiOauth.expiresAt // empty' "$BRAIN_CLAUDE_CREDS" 2>/dev/null || true)"
+    token="$(printf '%s' "$creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)"
+    expires="$(printf '%s' "$creds" | jq -r '.claudeAiOauth.expiresAt // empty' 2>/dev/null || true)"
+    creds=""
     if [ -z "$token" ]; then
       reason="no-token"
     elif [ -n "$expires" ] && [ "${expires%%.*}" -lt "$((now * 1000))" ] 2>/dev/null; then

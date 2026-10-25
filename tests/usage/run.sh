@@ -119,7 +119,7 @@ for f in garbage.json out-of-range.json malformed.json; do
   check "$f -> Explore allowed"              '[ "$(gate Explore)" = "allow" ]'
 done
 rm -f "$BRAIN_USAGE_SUMMARY"
-BRAIN_CLAUDE_CREDS="$WORK/nope.json" usage_refresh_anthropic >/dev/null 2>&1 || true
+BRAIN_CLAUDE_CREDS="$WORK/nope.json" BRAIN_CLAUDE_KEYCHAIN_SERVICE="" usage_refresh_anthropic >/dev/null 2>&1 || true
 check "missing credentials -> unknown"       '[ "$(usage_state)" = "unknown" ]'
 check "missing credentials -> allowed"       '[ "$(gate Explore)" = "allow" ]'
 check "missing credentials -> reason logged" 'usage_last_error | grep -q no-credentials'
@@ -129,6 +129,18 @@ echo '{"claudeAiOauth":{"accessToken":"faketoken-should-not-leak","expiresAt":10
 BRAIN_CLAUDE_CREDS="$WORK/creds/c.json" usage_refresh_anthropic >/dev/null 2>&1 || true
 check "expired token -> reason logged"       'usage_last_error | grep -q token-expired'
 check "token never written to state"         '! grep -rq faketoken-should-not-leak "$BRAIN_STATE_DIR"'
+
+mkdir -p "$WORK/kcbin"
+cat > "$WORK/kcbin/security" <<'SEC'
+#!/bin/sh
+[ "$5" = "brain-test-service" ] || exit 44
+echo '{"claudeAiOauth":{"accessToken":"kc-token-should-not-leak","expiresAt":1000}}'
+SEC
+chmod +x "$WORK/kcbin/security"
+PATH="$WORK/kcbin:$PATH" BRAIN_CLAUDE_CREDS="$WORK/nope.json" BRAIN_CLAUDE_KEYCHAIN_SERVICE="brain-test-service" \
+  usage_refresh_anthropic >/dev/null 2>&1 || true
+check "keychain creds are read when no file"  'usage_last_error | grep -q token-expired'
+check "keychain token never written to state" '! grep -rq kc-token-should-not-leak "$BRAIN_STATE_DIR"'
 
 echo "== a failed refresh keeps the last good sample =="
 refresh flat-critical.json
