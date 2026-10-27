@@ -2269,6 +2269,7 @@ cmd_uninstall() {
   printf '    stop and remove the router%s service(s)\n' "$([ "$(brain_os)" = macos ] && echo " (launchd)" || echo " (systemd)")"
   printf '    remove the brain commands from ~/.local/bin\n'
   printf '    remove claude-brain hooks, agents and CLAUDE.md blocks from ~/.claude\n'
+  printf '    remove the brain-council skill from Codex if this install owns its link\n'
   if [ "$(account_list | wc -l)" -gt 1 ]; then
     printf '    the same for every extra account set: %s\n' "$(account_list | sed 1d | paste -sd' ' -)"
   fi
@@ -2296,6 +2297,22 @@ cmd_uninstall() {
   for tool in brain-ask brain-compress brain-proxy-build; do
     rm -f "$HOME/.local/bin/$tool"
   done
+
+  local codex_council_link
+  if [ -f "$BRAIN_STATE_DIR/codex-skill-links" ]; then
+    while IFS= read -r codex_council_link; do
+      if [ -L "$codex_council_link" ] && [ "$(readlink "$codex_council_link")" = "$BRAIN_REPO_DIR/host/codex/skills/brain-council" ]; then
+        rm -f "$codex_council_link"
+      fi
+    done < "$BRAIN_STATE_DIR/codex-skill-links"
+    rm -f "$BRAIN_STATE_DIR/codex-skill-links"
+  fi
+  if [ -f "$BRAIN_STATE_DIR/codex-created-dirs" ]; then
+    while IFS= read -r codex_skill_dir; do
+      rmdir "$codex_skill_dir" 2>/dev/null || true
+    done < "$BRAIN_STATE_DIR/codex-created-dirs"
+    rm -f "$BRAIN_STATE_DIR/codex-created-dirs"
+  fi
 
   local name
   for name in "${ALL_BRAIN_AGENTS[@]}"; do

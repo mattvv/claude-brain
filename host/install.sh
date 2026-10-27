@@ -38,6 +38,33 @@ for tool in brain brain-ask brain-compress brain-proxy-build; do
 done
 chmod 755 "$REPO_DIR/host/libexec/legacy/brain-ask"
 
+CODEX_ROOT="${CODEX_HOME:-$HOME/.codex}"
+CODEX_SKILLS_DIR="$CODEX_ROOT/skills"
+CODEX_COUNCIL_LINK="$CODEX_SKILLS_DIR/brain-council"
+CODEX_COUNCIL_SOURCE="$REPO_DIR/host/codex/skills/brain-council"
+CODEX_LINKS_FILE="$STATE_DIR/codex-skill-links"
+CODEX_DIRS_FILE="$STATE_DIR/codex-created-dirs"
+if [ ! -d "$CODEX_SKILLS_DIR" ] && ! grep -Fxq "$CODEX_SKILLS_DIR" "$CODEX_DIRS_FILE" 2>/dev/null; then
+  printf '%s\n' "$CODEX_SKILLS_DIR" >> "$CODEX_DIRS_FILE"
+fi
+if [ ! -d "$CODEX_ROOT" ] && ! grep -Fxq "$CODEX_ROOT" "$CODEX_DIRS_FILE" 2>/dev/null; then
+  printf '%s\n' "$CODEX_ROOT" >> "$CODEX_DIRS_FILE"
+fi
+mkdir -p "$CODEX_SKILLS_DIR"
+if [ ! -e "$CODEX_COUNCIL_LINK" ] && [ ! -L "$CODEX_COUNCIL_LINK" ]; then
+  ln -s "$CODEX_COUNCIL_SOURCE" "$CODEX_COUNCIL_LINK"
+  note "link $CODEX_COUNCIL_LINK"
+elif [ -L "$CODEX_COUNCIL_LINK" ] && [ "$(readlink "$CODEX_COUNCIL_LINK")" = "$CODEX_COUNCIL_SOURCE" ]; then
+  note "link $CODEX_COUNCIL_LINK"
+else
+  echo "kept existing Codex skill at $CODEX_COUNCIL_LINK" >&2
+fi
+if [ -L "$CODEX_COUNCIL_LINK" ] && [ "$(readlink "$CODEX_COUNCIL_LINK")" = "$CODEX_COUNCIL_SOURCE" ]; then
+  if ! grep -Fxq "$CODEX_COUNCIL_LINK" "$CODEX_LINKS_FILE" 2>/dev/null; then
+    printf '%s\n' "$CODEX_COUNCIL_LINK" >> "$CODEX_LINKS_FILE"
+  fi
+fi
+
 # Build and install the native brain-compress binary (async consultation +
 # observe-only token accounting). Best effort: if the Rust toolchain is missing
 # or the build fails, brain-ask transparently falls back to the bundled Bash

@@ -11,6 +11,7 @@
 #   tests/install/run.sh
 # shellcheck disable=SC2034  # captured output is referenced inside check's eval
 set -uo pipefail
+unset CODEX_HOME
 
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -P "$HERE/../.." && pwd)"
@@ -94,11 +95,36 @@ check "records a manifest of what it touched" '[ -s "$H/.local/state/brain/insta
 check "never writes /etc on a local profile" \
   '! grep -q motd "$H/.local/state/brain/install-manifest"'
 check "links the commands" '[ -L "$H/.local/bin/brain" ]'
+check "links the Codex council skill" \
+  '[ "$(readlink "$H/.codex/skills/brain-council")" = "$REPO/host/codex/skills/brain-council" ]'
 
 # Re-running must not bury the original backup.
 HOME="$H" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/host/install.sh" >/dev/null 2>&1
 check "re-running keeps the ORIGINAL backup" \
   '[ "$(jq -r .statusLine.command "$H/.local/state/brain/settings.json.pre-brain")" = "/Users/me/my-statusline.sh" ]'
+check "re-running keeps the Codex skill link" \
+  '[ "$(readlink "$H/.codex/skills/brain-council")" = "$REPO/host/codex/skills/brain-council" ]'
+
+# launchd and systemd --user are keyed by uid, not HOME. Keep both uninstall
+# fixtures on service stubs so they cannot reach this user's live services.
+SVC_STUB="$TMP/svcstub"; mkdir -p "$SVC_STUB"
+for tool in launchctl systemctl loginctl; do
+  printf '#!/bin/sh\necho "$0 $*" >> "%s/calls"\nexit 0\n' "$SVC_STUB" > "$SVC_STUB/$tool"
+  chmod +x "$SVC_STUB/$tool"
+done
+
+H_CODEX="$TMP/custom-codex"; mkdir -p "$H_CODEX"
+CODEX_HOME="$H_CODEX/config" HOME="$H_CODEX" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/host/install.sh" >/dev/null 2>&1
+check "respects CODEX_HOME" \
+  '[ "$(readlink "$H_CODEX/config/skills/brain-council")" = "$REPO/host/codex/skills/brain-council" ]'
+printf 'y\n' | HOME="$H_CODEX" PATH="$SVC_STUB:$PATH" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
+check "removes the custom CODEX_HOME link without that variable" \
+  '[ ! -e "$H_CODEX/config/skills/brain-council" ]'
+
+H_OWNED="$TMP/owned-skill"; mkdir -p "$H_OWNED/.codex/skills/brain-council"
+printf 'keep\n' > "$H_OWNED/.codex/skills/brain-council/marker"
+HOME="$H_OWNED" PATH="/usr/local/bin:/usr/bin:/bin" bash "$REPO/host/install.sh" >/dev/null 2>&1
+check "keeps an existing Codex skill" '[ -f "$H_OWNED/.codex/skills/brain-council/marker" ]'
 
 # A fresh machine with no Claude config: the statusline is free, so take it.
 H2="$TMP/fresh"; mkdir -p "$H2/.config/brain"
@@ -217,13 +243,6 @@ check "and says it only once" '[ ! -e "$UPD/auto-result" ]'
 HOME="$H" bash "$REPO/host/bin/brain" config autoupdate off >/dev/null 2>&1
 
 echo "== uninstall puts it back =="
-# launchd and systemd --user are keyed by uid, not HOME: a real launchctl here
-# would boot out the services of whatever brain runs on this machine.
-SVC_STUB="$TMP/svcstub"; mkdir -p "$SVC_STUB"
-for tool in launchctl systemctl loginctl; do
-  printf '#!/bin/sh\necho "$0 $*" >> "%s/calls"\nexit 0\n' "$SVC_STUB" > "$SVC_STUB/$tool"
-  chmod +x "$SVC_STUB/$tool"
-done
 printf 'y\n' | HOME="$H" PATH="$SVC_STUB:$PATH" bash "$REPO/host/bin/brain" uninstall >/dev/null 2>&1
 check "session start hook removed" \
   '! jq -r ".hooks.SessionStart[]?.hooks[].command" "$H/.claude/settings.json" | grep -q update-notice'
@@ -231,6 +250,8 @@ check "hooks removed"        '[ "$(jq -r ".hooks.PreToolUse | length" "$H/.claud
 check "their own statusline still theirs" \
   '[ "$(jq -r .statusLine.command "$H/.claude/settings.json")" = "/Users/me/my-statusline.sh" ]'
 check "brain commands gone"  '[ ! -e "$H/.local/bin/brain" ]'
+check "Codex skill link gone" '[ ! -e "$H/.codex/skills/brain-council" ]'
+check "new Codex directories gone" '[ ! -d "$H/.codex" ]'
 check "credentials kept without --purge" '[ -d "$H/.config/brain" ]'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
