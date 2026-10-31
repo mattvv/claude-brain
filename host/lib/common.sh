@@ -462,7 +462,7 @@ if [ -z "${BRAIN_CLAUDE_KEYCHAIN_SERVICE+set}" ]; then
   if [ "$BRAIN_CLAUDE_DIR" = "$HOME/.claude" ]; then
     BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials"
   else
-    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials-$(printf '%s' "$BRAIN_CLAUDE_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
+    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials-$(printf '%s' "$BRAIN_CLAUDE_DIR" | sha256_hex 2>/dev/null | cut -c1-8 || true)"
   fi
 fi
 BRAIN_USAGE_ENDPOINT="${BRAIN_USAGE_ENDPOINT:-https://api.anthropic.com/api/oauth/usage}"
@@ -643,7 +643,7 @@ usage_claude_creds_json() {
   if [ -f "$BRAIN_CLAUDE_CREDS" ]; then
     cat "$BRAIN_CLAUDE_CREDS" 2>/dev/null
   elif [ -n "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" ] && command -v security >/dev/null 2>&1; then
-    security find-generic-password -a "$USER" -s "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" -w 2>/dev/null
+    security find-generic-password -a "${USER:-$(id -un)}" -s "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" -w 2>/dev/null
   else
     return 1
   fi
