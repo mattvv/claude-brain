@@ -213,8 +213,9 @@ Claude app. It runs inside tmux: `Ctrl-b d` steps out and leaves it running, and
 | `brain compress savings` | See how many tokens the compression engine has saved (and `status` / `discover` / `off`) |
 | `brain usage` | See how much of each subscription is left, and who can still take work (`override <min>` to spend the reserve anyway) |
 | `brain explore "<question>"` | Ask a cheap model to navigate the repo and answer, so the brain doesn't read files itself |
+| `brain verify --list` | This repo's verify skills (`.claude/skills` or `.agents/skills`) and their feature maps |
 | `brain config pstack on` | Work in [pstack mode](#pstack-mode-verification-first-development): playbooks, verify-first, `brain-*` review panels, evidence in replies |
-| `brain verify [args]` | Run the current repo's verify skill (`.claude/skills/verify-*`): `doctor` by default, or `launch` / `tap ...` / `shot ...` |
+| `brain verify [args]` | Run the current repo's verify skill (`.claude/skills/verify-*` or `.agents/skills/verify-*`): `doctor` by default, or `launch` / `tap ...` / `shot ...` |
 | `brain recall "<query>"` | Search your past sessions for a command/decision/fix (opt-in; enable in `brain setup`) |
 | `brain update` | Get the latest claude-brain. New sessions (phone included) and the statusline say when one is out, and `brain status` checks on demand |
 | `brain config autoupdate on` | Let the brain install releases itself: at most once a day, only on a clean `main` checkout, never mid-consultation. The next session says it updated |
@@ -346,7 +347,7 @@ What changes in a session:
 
 ### Verify skills
 
-A verify skill is a small, project-local skill at `.claude/skills/verify-<app>/` that tells an agent how to drive your app like a user. It covers launch, a read-only doctor check, drive (real selectors and commands), evidence, and cleanup. It also holds a feature map: one file per user-facing feature describing how to reach it, how to drive it, and its gotchas. `brain verify` finds the repo's skill and runs it:
+A verify skill is a small, project-local skill at `.claude/skills/verify-<app>/` (or `.agents/skills/verify-<app>/`, the Codex layout) that tells an agent how to drive your app like a user. It covers launch, a read-only doctor check, drive (real selectors and commands), evidence, and cleanup. It also holds a feature map: one file per user-facing feature describing how to reach it, how to drive it, and its gotchas. `brain verify` finds the repo's skill and runs it:
 
 ```bash
 brain verify                 # the skill's doctor: is the app worth driving?
@@ -355,7 +356,24 @@ brain verify tap --text Continue
 brain verify shot after-continue
 ```
 
-No verify skill yet? Ask Claude to make one ("create a verify skill for this repo"). With pstack mode on, it interviews the repo, writes the skill, and runs it end to end once before handing it over. For Unity projects the skill drives the open editor through the [Unity CLI](https://docs.unity.com/en-us/unity-cli) and its Pipeline package. For example, a UI Toolkit game can be tapped at iPhone resolution with real Input System events.
+pstack mode also installs three skills: `brain-create-verify-skill` (write and prove a verify skill with a feature map), `brain-maintain-verify-skill` (keep the map honest and write each run's lessons back), and `brain-council` (send a diff to Sol, Grok and Muse, check every finding, fix, and loop). `brain config pstack off` removes them. No verify skill yet? Ask Claude to make one ("create a verify skill for this repo"). With pstack mode on, it interviews the repo, writes the skill, and runs it end to end once before handing it over. For Unity projects the skill drives the open editor through the [Unity CLI](https://docs.unity.com/en-us/unity-cli) and its Pipeline package. For example, a UI Toolkit game can be tapped at iPhone resolution with real Input System events.
+
+### How pstack mode compares
+
+What ships here, next to the other projects as their READMEs and skill files describe them (read 2026-10-31: [pstack](https://github.com/cursor/plugins/tree/main/pstack), [open-pstack](https://github.com/ericlitman/open-pstack), [Superpowers](https://github.com/obra/superpowers)). "Skill guidance" means a shipped skill tells the agent to build or do it; `brain verify` itself does not enforce it.
+
+| Capability | claude-brain pstack mode | pstack (Cursor) | open-pstack | Superpowers |
+| --- | --- | --- | --- | --- |
+| Verification-first playbooks | Yes (`CLAUDE.md` brief + reference) | Yes | Yes | Verify-before-done skill |
+| Create a verify skill with a feature map | `brain-create-verify-skill` | `create-verification-skill` | Same | No |
+| Keep the map honest | `brain-maintain-verify-skill`, with a step that writes each run's lessons back | `maintain-verification-skill` | Same | No |
+| Run the repo's verify skill | `brain verify` (`.claude` or `.agents`), `brain verify --list` | No runner command | A live gate for its own repo | No |
+| Diff picks the features to prove | Skill guidance: generated skills ship `features/registry.json` and `verify.sh affected` | No | Path registry for its own plugin | No |
+| Shared-machine safety | Skill guidance: device locks, scenario-scoped cleanup, one driver | No | Run-owned state | No |
+| Multi-model review | `brain-council` on `brain-sol`, `brain-grok`, `brain-muse` | Claude + Grok roles | Opus, Sol, Grok via provider CLIs | No |
+| Design arena | `brain-council` arena mode | `arena` | `arena` | Brainstorming skill |
+| Live consult progress | Per-session statusline, hook and `brain consult wait` | No | Run receipts | No |
+| Not here yet | TDD and systematic-debugging skills (Superpowers has them), a PR evidence gate | | | |
 
 If you also install the open-pstack plugin, its skills (`architect`, `interrogate`, `tdd`, `create-verification-skill` ...) work alongside this mode. The mode tells Claude to route the plugin's model roles to `brain-*` consultants, not the plugin's own CLI runner.
 

@@ -14,9 +14,9 @@ jobs:
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck -x -S warning install.sh setup.sh host/install.sh host/bootstrap.sh \
             host/bin/brain host/bin/brain-ask host/bin/brain-proxy-build host/lib/common.sh \
-            host/lib/platform.sh host/provision/digitalocean.sh host/claude/statusline.sh \
+            host/lib/platform.sh host/lib/consult.sh host/provision/digitalocean.sh host/claude/statusline.sh \
             host/claude/hooks/*.sh tests/platform/run.sh tests/install/run.sh \
-            tests/usage/run.sh tests/accounts/run.sh tests/prompt-budgets/run.sh tests/pstack/run.sh
+            tests/usage/run.sh tests/accounts/run.sh tests/prompt-budgets/run.sh tests/pstack/run.sh tests/consult/run.sh
       - name: cloud-init schema
         run: |
           sudo apt-get install -y cloud-init
@@ -54,6 +54,7 @@ jobs:
       - run: tests/accounts/run.sh
       - run: tests/prompt-budgets/run.sh
       - run: tests/pstack/run.sh
+      - run: tests/consult/run.sh
 
   tests-macos:
     runs-on: macos-latest
@@ -70,6 +71,7 @@ jobs:
       - run: /bin/bash tests/accounts/run.sh
       - run: /bin/bash tests/prompt-budgets/run.sh
       - run: /bin/bash tests/pstack/run.sh
+      - run: /bin/bash tests/consult/run.sh
       - name: installer plans on macOS
         run: /bin/bash install.sh --plan --here --scope workspace
 
