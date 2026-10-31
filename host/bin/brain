@@ -45,6 +45,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 AGENTS_DIR="$BRAIN_CLAUDE_DIR/agents"
 AGENTS_RC_SRC="$BRAIN_REPO_DIR/host/claude/agents-rc"
 AGENTS_MULTI_SRC="$BRAIN_REPO_DIR/host/claude/agents-multi"
+PSTACK_SKILLS_SRC="$BRAIN_REPO_DIR/host/claude/skills-pstack"
 
 # Names covered by both lanes; installing one lane removes the other's copies.
 ALL_BRAIN_AGENTS=(brain-astra brain-fable brain-grok brain-kimi brain-luna brain-muse brain-sol brain-terra)
@@ -207,12 +208,62 @@ install_consult_block() {
 }
 
 # pstack mode: verification-first working method (opt-in via 'brain config pstack').
+# It ships the block plus the skills in host/claude/skills-pstack (create and
+# maintain a verify skill, run a review council).
 install_pstack_block() {
   if [ "$(setting_get PSTACK off)" = on ]; then
     install_block "$BRAIN_REPO_DIR/host/claude/pstack-mode.md" pstack
+    install_pstack_skills
   else
     remove_block pstack
+    remove_pstack_skills
   fi
+}
+
+# Each installed copy carries a marker file. A same-named skill without one is
+# the user's own: it is never overwritten or removed.
+PSTACK_SKILL_MARKER=".claude-brain"
+
+install_pstack_skills() {
+  local dir name target stage
+  # An extra account set links skills/ to the default set's; that set owns them.
+  [ ! -L "$BRAIN_CLAUDE_DIR/skills" ] || return 0
+  mkdir -p "$BRAIN_CLAUDE_DIR/skills"
+  for dir in "$PSTACK_SKILLS_SRC"/*/; do
+    [ -f "$dir/SKILL.md" ] || continue
+    name="$(basename "$dir")"
+    target="$BRAIN_CLAUDE_DIR/skills/$name"
+    if { [ -e "$target" ] || [ -L "$target" ]; } && [ ! -e "$target/$PSTACK_SKILL_MARKER" ]; then
+      warn "kept your own skill at $target; claude-brain's $name is not installed"
+      continue
+    fi
+    # Staged with its marker, then moved in, so an interrupted install never
+    # leaves an unmarked copy that later looks like the user's own.
+    stage="$(mktemp -d "$BRAIN_CLAUDE_DIR/skills/.brain-stage.XXXXXX")" || continue
+    if cp -R "$dir/." "$stage/" && : >"$stage/$PSTACK_SKILL_MARKER" &&
+       ! { { [ -e "$target" ] || [ -L "$target" ]; } && [ ! -e "$target/$PSTACK_SKILL_MARKER" ]; }; then
+      # Re-checked just above: a folder the user created meanwhile is left alone.
+      chmod -R u+w "$target" 2>/dev/null || true
+      rm -rf "$target"
+      mv "$stage" "$target"
+    else
+      rm -rf "$stage"
+    fi
+  done
+}
+
+# By marker, not by today's names, so a skill a later release renamed or dropped
+# is removed too.
+remove_pstack_skills() {
+  local target
+  [ ! -L "$BRAIN_CLAUDE_DIR/skills" ] || return 0
+  for target in "$BRAIN_CLAUDE_DIR"/skills/*/; do
+    if [ -e "$target$PSTACK_SKILL_MARKER" ]; then
+      chmod -R u+w "${target%/}" 2>/dev/null || true
+      rm -rf "${target%/}"
+    fi
+  done
+  rmdir "$BRAIN_CLAUDE_DIR/skills" 2>/dev/null || true
 }
 
 step_done() { printf '  %s %s\n' "${C_GREEN}[done]${C_RESET}" "$1"; }
@@ -1696,6 +1747,7 @@ cmd_setup() {
     brain uninstall  remove claude-brain and restore your Claude Code config
     brain explore "question"   cheap-model repo navigation (discovery only)
     brain verify [args]        run this repo's verify skill (pstack mode; default: doctor)
+    brain verify --list        this repo's verify skills and their feature maps
 
 CHEAT
   if [ -t 0 ] && setup_yn "Start your brain session now?"; then
@@ -1813,27 +1865,68 @@ cmd_recall() {
 
 # ------------------------------------------------------------------- verify
 # Run the current repo's verification skill (pstack style): a project-local
-# .claude/skills/verify-<app>/scripts/verify.sh that launches and drives the
-# real app and keeps evidence. Defaults to its read-only doctor.
-cmd_verify() {
-  local root found="" n=0 f
-  root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
-  for f in "$root"/.claude/skills/verify-*/scripts/verify.sh; do
+# verify-<app>/scripts/verify.sh skill that launches and drives the real app and
+# keeps evidence. Defaults to its read-only doctor. Skills live in .claude/skills
+# or .agents/skills (Codex layout); a repo that links one to the other counts
+# each skill once.
+verify_skill_scripts() {
+  local root="$1" f real name seen="" names=""
+  for f in "$root"/.claude/skills/verify-*/scripts/verify.sh "$root"/.agents/skills/verify-*/scripts/verify.sh; do
     [ -x "$f" ] || continue
-    n=$((n+1)); found="$f"
+    real="$(abs_path "$(dirname "$(dirname "$f")")")"
+    case "$seen" in *"|$real|"*) continue ;; esac
+    seen="$seen|$real|"
+    # Two different skills with one name: the .claude copy wins, and --list says so.
+    name="$(verify_skill_name "$f")"
+    case "$names" in *"|$name|"*) warn "skipping $f: a skill named $name is already in .claude/skills"; continue ;; esac
+    names="$names|$name|"
+    printf '%s\n' "$f"
   done
-  if [ "$n" -eq 0 ]; then
-    die "no verify skill in $root (.claude/skills/verify-*/scripts/verify.sh) — ask Claude to create one"
-  fi
-  if [ "$n" -gt 1 ] && [ -z "${BRAIN_VERIFY_SKILL:-}" ]; then
-    warn "several verify skills; pick one with BRAIN_VERIFY_SKILL=<name>:"
-    for f in "$root"/.claude/skills/verify-*/scripts/verify.sh; do
-      printf '  %s\n' "$(basename "$(dirname "$(dirname "$f")")")"
+}
+
+verify_skill_name() { basename "$(dirname "$(dirname "$1")")"; }
+
+# One line per skill (its frontmatter description, cut short), then its feature
+# maps: features/*.md other than the README, by their H1 titles.
+verify_list() {
+  local f dir desc map title
+  while IFS= read -r f; do
+    dir="$(dirname "$(dirname "$f")")"
+    desc="$(sed -n 's/^description: *//p' "$dir/SKILL.md" 2>/dev/null | head -1 | cut -c1-110 || true)"
+    printf '%s%s%s  %s\n' "$C_BOLD" "$(verify_skill_name "$f")" "$C_RESET" "$desc"
+    for map in "$dir"/features/*.md; do
+      [ -f "$map" ] || continue
+      [ "$(basename "$map")" = README.md ] && continue
+      title="$(sed -n 's/^# //p' "$map" | head -1 || true)"
+      printf '  %-28s %s\n' "$(basename "$map" .md)" "$title"
     done
-    exit 2
+  done
+}
+
+cmd_verify() {
+  local root scripts found="" n f
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+  scripts="$(verify_skill_scripts "$root")"
+  n="$(printf '%s' "$scripts" | grep -c . || true)"
+  if [ "$n" -eq 0 ]; then
+    die "no verify skill in $root (.claude/skills or .agents/skills: verify-*/scripts/verify.sh) — ask Claude to create one"
   fi
-  [ -z "${BRAIN_VERIFY_SKILL:-}" ] || found="$root/.claude/skills/$BRAIN_VERIFY_SKILL/scripts/verify.sh"
-  [ -x "$found" ] || die "not an executable verify script: $found"
+  if [ "${1:-}" = "--list" ]; then
+    printf '%s\n' "$scripts" | verify_list
+    return 0
+  fi
+  if [ -n "${BRAIN_VERIFY_SKILL:-}" ]; then
+    found="$(printf '%s\n' "$scripts" | while IFS= read -r f; do
+      if [ "$(verify_skill_name "$f")" = "$BRAIN_VERIFY_SKILL" ]; then printf '%s\n' "$f"; fi
+    done | head -1)"
+    [ -n "$found" ] || die "no verify skill named $BRAIN_VERIFY_SKILL in $root"
+  elif [ "$n" -gt 1 ]; then
+    warn "several verify skills; pick one with BRAIN_VERIFY_SKILL=<name> (brain verify --list shows them):"
+    printf '%s\n' "$scripts" | while IFS= read -r f; do printf '  %s\n' "$(verify_skill_name "$f")"; done
+    exit 2
+  else
+    found="$scripts"
+  fi
   [ "$#" -gt 0 ] || set -- doctor
   exec "$found" "$@"
 }
@@ -2011,7 +2104,7 @@ cmd_consult() {
   local think
   case "${1:-status}" in
     status)
-      if line="$(consult_progress_line)"; then
+      if line="$(consult_progress_line "${CLAUDE_CODE_SESSION_ID:-}")"; then
         printf '%s\n' "$line"
       else
         printf 'idle\n'
@@ -2020,6 +2113,35 @@ cmd_consult() {
     log)
       [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
       readlink -f "$BRAIN_CONSULT_LINK"
+      ;;
+    wait)
+      # One bounded poll. Claude Code refuses `sleep N; brain consult status`, and a
+      # loop of sleeps hides the consult from the user, so this returns as soon as
+      # the consultation writes more, finishes, or the wait (max 55s) runs out.
+      local session="${CLAUDE_CODE_SESSION_ID:-}" wait_s="${2:-45}" log before after i
+      case "$wait_s" in '' | *[!0-9]*) die "usage: brain consult wait [seconds]" ;; esac
+      [ "$wait_s" -le 55 ] || wait_s=55
+      if ! log="$(consult_current_log "$session")"; then
+        printf 'idle\n'
+        return 0
+      fi
+      before="$log:$(file_size "$log" 2>/dev/null || echo 0):$(file_size "$log.thinking" 2>/dev/null || echo 0)"
+      i="$(date +%s)"
+      while [ $(($(date +%s) - i)) -lt "$wait_s" ]; do
+        sleep 1
+        # Not a $(...) call: CONSULT_LOG_LIVE must reach this shell.
+        consult_current_log "$session" >"$BRAIN_CONSULT_DIR/.wait.$$" || break
+        log="$(cat "$BRAIN_CONSULT_DIR/.wait.$$")"
+        [ "$CONSULT_LOG_LIVE" = 1 ] || break
+        after="$log:$(file_size "$log" 2>/dev/null || echo 0):$(file_size "$log.thinking" 2>/dev/null || echo 0)"
+        [ "$after" = "$before" ] || break
+      done
+      rm -f "$BRAIN_CONSULT_DIR/.wait.$$"
+      if line="$(consult_progress_line "$session")"; then
+        printf '%s\n' "$line"
+      else
+        printf 'idle\n'
+      fi
       ;;
     watch)
       [ -e "$BRAIN_CONSULT_LINK" ] || die "no consultation has run yet"
@@ -2032,7 +2154,7 @@ cmd_consult() {
       tail -f "$think"
       ;;
     *)
-      die "usage: brain consult [status|log|watch|think]"
+      die "usage: brain consult [status|wait [seconds]|log|watch|think]"
       ;;
   esac
 }
@@ -2320,8 +2442,10 @@ cmd_uninstall() {
   done
   remove_block routing
   remove_block ops
+  remove_block usage
   remove_block consult
   remove_block pstack
+  remove_pstack_skills
 
   # Un-register the hooks and hand the statusline back.
   local settings="$HOME/.claude/settings.json" backup="$BRAIN_STATE_DIR/settings.json.pre-brain"
@@ -2406,6 +2530,7 @@ account_unwire() {
   remove_block usage
   remove_block consult
   remove_block pstack
+  remove_pstack_skills
   if command -v jq >/dev/null 2>&1 && [ -s "$settings" ]; then
     jq --arg managed "$BRAIN_MANAGED_HOOKS" --arg default_md "$HOME/.claude/CLAUDE.md" '
       def strip(list): [list[]? | select((.hooks[]?.command // "") | test($managed) | not)];

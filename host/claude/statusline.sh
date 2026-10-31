@@ -18,27 +18,27 @@ while [ -L "$_sl_self" ]; do
   _sl_self="$(readlink "$_sl_self")"
   case "$_sl_self" in /*) ;; *) _sl_self="$_sl_dir/$_sl_self" ;; esac
 done
+_sl_lib="$(cd -P "$(dirname "$_sl_self")/../lib" && pwd)"
 # shellcheck source=../lib/platform.sh
-. "$(cd -P "$(dirname "$_sl_self")/../lib" && pwd)/platform.sh"
+. "$_sl_lib/platform.sh"
+# shellcheck source=../lib/consult.sh
+. "$_sl_lib/consult.sh"
 
 state="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
-consult="$state/consult/current"
-if [ -e "$consult" ]; then
-  # Live while a brain-ask runs (xhigh models think silently for minutes before
-  # the first text delta), or briefly after, so the finish is visible.
-  now="$(date +%s)"
-  mtime="$(file_mtime "$consult")"
-  if pgrep -f 'brain-ask ' >/dev/null 2>&1 || [ $((now - mtime)) -le 45 ]; then
-    target="$(basename "$(abs_path "$consult")")"
-    name="${target%-*.log}"
-    bytes="$(file_size "$consult")"
-    if [ "$bytes" -eq 0 ]; then
-      line="$line │ 🧠 $name thinking…"
-    else
-      snippet="$(tail -c 400 "$consult" 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')"
-      [ ${#snippet} -gt 70 ] && snippet="…${snippet: -70}"
-      line="$line │ 🧠 $name $((bytes/1024))kB: $snippet"
-    fi
+session="$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null)"
+# Live while this session's brain-ask runs (xhigh models think silently for
+# minutes before the first text delta), or briefly after, so the finish shows.
+if consult="$(consult_current_log "$session")"; then
+  name="$(basename "$consult")"
+  name="${name%-*.log}"
+  bytes="$(file_size "$consult" 2>/dev/null || echo 0)"
+  case "$bytes" in '' | *[!0-9]*) bytes=0 ;; esac
+  if [ "$bytes" -eq 0 ]; then
+    line="$line │ 🧠 $name thinking…"
+  else
+    snippet="$(tail -c 400 "$consult" 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')"
+    [ ${#snippet} -gt 70 ] && snippet="…${snippet: -70}"
+    line="$line │ 🧠 $name $((bytes/1024))kB: $snippet"
   fi
 fi
 

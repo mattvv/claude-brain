@@ -7,7 +7,9 @@
 //!   * POSTs `{model,max_tokens,messages:[{role:user,content:PROMPT}]}` (+system,
 //!     +output_config.effort, +stream) to `$BRAIN_PROXY_URL/v1/messages` with a
 //!     bearer token read from the token file — never placed in argv.
-//!   * answer log:    `$BRAIN_STATE_DIR/consult/<model>-<unix>.log`
+//!   * answer log:    `$BRAIN_STATE_DIR/consult/<model>-<unix>.log` (`.N` before `.log`
+//!     when another run of the model took that second); its path is appended to
+//!     the launcher's `consult/owners/<pid>` record
 //!     reasoning log: `<answer-log>.thinking`
 //!     `$BRAIN_STATE_DIR/consult/current` — absolute symlink to the answer log.
 //!   * streaming text deltas go to stdout AND the answer log, flushed
@@ -772,16 +774,21 @@ impl ConsultLogs {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' { c } else { '_' })
             .collect();
-        let answer_path = dir.join(format!("{safe_model}-{stamp}.log"));
+        // Two runs of one model in the same second must not share (and truncate) a
+        // log, so a clash takes the next free `.N` suffix: <model>-<unix>.N.log.
+        let mut answer_path = dir.join(format!("{safe_model}-{stamp}.log"));
+        let mut suffix = 0u32;
+        let answer = loop {
+            match tokio::fs::OpenOptions::new().create_new(true).write(true).open(&answer_path).await {
+                Ok(file) => break file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && suffix < 99 => {
+                    suffix += 1;
+                    answer_path = dir.join(format!("{safe_model}-{stamp}.{suffix}.log"));
+                }
+                Err(error) => return Err(format!("cannot open {}: {error}", answer_path.display())),
+            }
+        };
         let thinking_path = dir.join(format!("{}.thinking", answer_path.display()));
-
-        let answer = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&answer_path)
-            .await
-            .map_err(|error| format!("cannot open {}: {error}", answer_path.display()))?;
         let thinking = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -791,6 +798,7 @@ impl ConsultLogs {
             .map_err(|error| format!("cannot open {}: {error}", thinking_path.display()))?;
 
         // `current` is an absolute symlink to the answer log (statusline + tail -f).
+        // Built beside it and renamed over it, so two launches never race on it.
         let current = dir.join("current");
         let absolute = if answer_path.is_absolute() {
             answer_path.clone()
@@ -799,9 +807,21 @@ impl ConsultLogs {
                 .map_err(|error| format!("cannot resolve cwd: {error}"))?
                 .join(&answer_path)
         };
-        let _ = std::fs::remove_file(&current);
-        std::os::unix::fs::symlink(&absolute, &current)
+        let staged = dir.join(format!(".current.{}", std::process::id()));
+        let _ = std::fs::remove_file(&staged);
+        std::os::unix::fs::symlink(&absolute, &staged)
+            .and_then(|()| std::fs::rename(&staged, &current))
             .map_err(|error| format!("cannot link {}: {error}", current.display()))?;
+
+        // The launcher registered this run under its pid (kept across exec) in
+        // consult/owners; record the exact log so status never has to guess it.
+        let owner = dir.join("owners").join(std::process::id().to_string());
+        if owner.is_file() {
+            if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&owner) {
+                use std::io::Write as _;
+                let _ = writeln!(file, "{}", absolute.display());
+            }
+        }
 
         Ok(Self { answer_path, thinking_path, answer, thinking, stdout: tokio::io::stdout() })
     }
@@ -1177,5 +1197,27 @@ mod tests {
     fn unknown_profile_is_ignored() {
         assert!(profile_instruction("bogus").is_none());
         assert!(profile_instruction("").is_none());
+    }
+
+    #[tokio::test]
+    async fn same_second_runs_get_their_own_logs_and_record_them() {
+        let state = std::env::temp_dir().join(format!("brain-ask-logs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        let owners = state.join("consult").join("owners");
+        std::fs::create_dir_all(&owners).unwrap();
+        let owner = owners.join(std::process::id().to_string());
+        std::fs::write(&owner, "session\n1\nm\nstart\n").unwrap();
+
+        let first = super::ConsultLogs::create(&state, "m/x").await.unwrap();
+        let second = super::ConsultLogs::create(&state, "m/x").await.unwrap();
+
+        assert_ne!(first.answer_path, second.answer_path, "a clash must not reuse a log");
+        let name = second.answer_path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with("m_x-") && name.ends_with(".log"), "sanitized name: {name}");
+        let current = std::fs::read_link(state.join("consult").join("current")).unwrap();
+        assert_eq!(current.file_name(), second.answer_path.file_name());
+        let recorded = std::fs::read_to_string(&owner).unwrap();
+        assert!(recorded.contains(&*second.answer_path.to_string_lossy()), "owner records its log");
+        let _ = std::fs::remove_dir_all(&state);
     }
 }

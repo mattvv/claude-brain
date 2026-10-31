@@ -79,6 +79,7 @@ if [ "$STREAM" -eq 1 ]; then
   # error body, so point the caller at the non-streaming mode for details.
   CONSULT_DIR="$BRAIN_STATE_DIR/consult"
   mkdir -p "$CONSULT_DIR"
+  CONSULT_DIR="$(cd "$CONSULT_DIR" && pwd -P)"   # absolute, so the `current` link resolves
   # (ls exits 2 when no logs exist yet — same set -e/pipefail trap as 0076294)
   { ls -t "$CONSULT_DIR"/*.log 2>/dev/null || true; } | tail -n +20 | xargs -r rm -f
   # Drop reasoning sidecars whose answer log has been retired.
@@ -86,11 +87,22 @@ if [ "$STREAM" -eq 1 ]; then
     [ -e "$t" ] || continue
     [ -e "${t%.thinking}" ] || rm -f "$t"
   done
-  CONSULT_LOG="$CONSULT_DIR/$MODEL-$(date +%s).log"
+  # Same name rule as the native applet: sanitized model, unix time, and a .N
+  # suffix when another run of the model took that second (never truncate it).
+  SAFE_MODEL="$(printf '%s' "$MODEL" | tr -c 'A-Za-z0-9._-' '_')"
+  STAMP="$(date +%s)"
+  CONSULT_LOG="$CONSULT_DIR/$SAFE_MODEL-$STAMP.log"
+  n=0
+  while ! (set -o noclobber; : > "$CONSULT_LOG") 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -lt 100 ] || die "cannot create a consultation log in $CONSULT_DIR"
+    CONSULT_LOG="$CONSULT_DIR/$SAFE_MODEL-$STAMP.$n.log"
+  done
   THINK_LOG="$CONSULT_LOG.thinking"
-  : > "$CONSULT_LOG"
   : > "$THINK_LOG"
-  ln -sfn "$CONSULT_LOG" "$CONSULT_DIR/current"
+  ln -sfn "$CONSULT_LOG" "$CONSULT_DIR/.current.$$" && mv -f "$CONSULT_DIR/.current.$$" "$CONSULT_DIR/current"
+  # The launcher registered this run under its pid, kept across exec.
+  [ ! -f "$CONSULT_DIR/owners/$$" ] || printf '%s\n' "$CONSULT_LOG" >>"$CONSULT_DIR/owners/$$"
   warn "streaming — watch live: tail -f $CONSULT_DIR/current"
   curl -sSN --fail-with-body --connect-timeout 10 --max-time 3600 \
     -H @"$AUTH_HDR" \

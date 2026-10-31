@@ -28,8 +28,12 @@ if [ "$BRAIN_ACCOUNT" != default ]; then
   esac
 fi
 
+# Record this run's owner (session id, start time) under its pid, which both
+# execs below keep, so status surfaces can tell a live run from a mention.
+consult_register_owner "${1:-}"
+
 if [ -z "${BRAIN_ASK_LEGACY:-}" ] && [ -x "$NATIVE" ]; then
-  # argv[0]=brain-ask so the statusline's `pgrep -f 'brain-ask '` still matches.
+  # argv[0]=brain-ask so consult.sh can confirm the owner pid is this run.
   exec -a brain-ask "$NATIVE" "$@"
 fi
 

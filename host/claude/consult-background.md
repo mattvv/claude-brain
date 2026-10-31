@@ -2,7 +2,7 @@
 
 Run consultations and `brain-*` bridge agents in the background (`run_in_background: true`).
 **The user cannot see Bash output**; in a Remote Control session your chat text is all they see.
-While one runs, poll with `sleep 45; brain consult status` (never a loop of sleeps, never
+While one runs, poll with `brain consult wait` (never a loop of sleeps, never
 over ~60s per call) and write one chat line between polls on what the consultant is
 *arguing*. At `--effort xhigh` the log sits at 0 bytes for minutes; say so. Relay the full
 result when it completes.
@@ -21,7 +21,7 @@ inside a long Bash loop shows them nothing but "running 1 task".
 
 So while a consultation is running:
 
-1. Poll briefly — `sleep 45; brain consult status` — never a loop of sleeps, and
+1. Poll briefly — `brain consult wait` — never a loop of sleeps, and
    never more than ~60s in one Bash call.
 2. Write one line of chat between polls, saying what the consultant is currently
    arguing, not just how many bytes arrived.
