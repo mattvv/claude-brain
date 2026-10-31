@@ -5,10 +5,11 @@ Work verification-first, in the style of Lauren Tan's pstack. For non-trivial en
   its steps into your todo list. Learn how the system works before changing it; name the data
   shape before writing code; make the smallest complete change.
 - Prove it on the real thing, not "tests pass": run `brain verify` (the repo's
-  `.claude/skills/verify-*/` skill) for anything a user sees; headless tests for pure logic.
-  No verify skill? Offer to create one.
-- Contested design or risky diff: same prompt to three other families (`brain-sol`,
-  `brain-grok`, `brain-muse`) plus your own read; agreement is signal, disagreement a finding.
+  `verify-*` skill) for anything a user sees; headless tests for pure logic.
+  No verify skill? Use the `brain-create-verify-skill` skill; keep it honest with
+  `brain-maintain-verify-skill`.
+- Contested design or risky diff: the `brain-council` skill (same prompt to `brain-sol`,
+  `brain-grok`, `brain-muse`, check each finding, fix, loop); agreement is signal.
 - Reply with evidence: each claim labelled measured, inferred, or guess; name what you could not
   verify and why. Pause before irreversible actions; otherwise proceed and report.
 
@@ -50,8 +51,9 @@ list as `skip: <reason>`.
 
 ## Verification
 
-- `brain verify` finds `.claude/skills/verify-*/scripts/verify.sh` in the current repo and
-  runs it (`brain verify doctor` by default; any other args pass through). Read the skill's
+- `brain verify` finds `verify-*/scripts/verify.sh` under `.claude/skills` or `.agents/skills`
+  in the current repo and runs it (`brain verify doctor` by default; any other args pass
+  through). `brain verify --list` shows each skill and its feature maps. Read the skill's
   SKILL.md and feature map before driving.
 - A verify skill has Launch (how to start the app until it is usable), Doctor (read-only health
   check), Drive (real selectors and commands), Evidence (what to capture, where it survives),
@@ -63,6 +65,21 @@ list as `skip: <reason>`.
   resulting state; check side effects in a second view; never report a skipped entry point as
   verified through another path. An unreachable journey is reported with the command tried and
   the unmet precondition.
+- A check proves a fix only if it fails on the unchanged code first. Run it there before the
+  change. Watch for assertions that retry until they pass: a "not visible" check that waits
+  for a 5 s hint to end passes on the old code too. Take one look instead.
+- Isolate every run: its own backend, database, ports and data per worktree. Never drive a
+  server or database another session started.
+- Setup and cleanup touch only data the scenario created, matched on seeded values such as an
+  address or name. A broad match on a real phone or account deletes someone's work.
+- Shared machines: the skill takes a lock per shared resource (device, simulator, emulator) in
+  one directory every session uses, such as `/tmp/device-locks/<name>` holding the owner, and
+  refuses a resource another owner holds. Drive one heavy target at a time, stop only what the
+  skill started, and restore any device setting it changed.
+- One agent drives the devices. In a coding loop the coding agent edits and runs unit tests;
+  the main session runs the verify skill, so two agents never fight over a device.
+- A `features/registry.json` that maps source path patterns to features lets the skill choose
+  the features a diff reaches (`verify.sh affected`) and fail on paths no feature owns.
 
 ## Panels
 

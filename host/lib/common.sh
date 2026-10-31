@@ -25,6 +25,8 @@ BRAIN_REPO_DIR="${BRAIN_REPO_DIR:-$(cd -P "$BRAIN_LIB_DIR/../.." && pwd)}"
 # sources common.sh gets the portable helpers automatically.
 # shellcheck source=platform.sh
 . "$BRAIN_LIB_DIR/platform.sh"
+# shellcheck source=consult.sh
+. "$BRAIN_LIB_DIR/consult.sh"
 BRAIN_CONFIG_DIR="${BRAIN_CONFIG_DIR:-$HOME/.config/brain}"
 BRAIN_DATA_DIR="${BRAIN_DATA_DIR:-$HOME/.local/share/brain}"
 BRAIN_STATE_DIR="${BRAIN_STATE_DIR:-$HOME/.local/state/brain}"
@@ -371,38 +373,36 @@ update_auto_maybe() {
 BRAIN_CONSULT_DIR="$BRAIN_STATE_DIR/consult"
 BRAIN_CONSULT_LINK="$BRAIN_CONSULT_DIR/current"
 
-# True while a `brain-ask --stream` consultation is running, or finished within
-# the last 45s so the completion stays visible for one more poll.
+# True while one of this session's brain-ask consultations runs, or finished
+# within the last 45s so the completion stays visible for one more poll. $1 is
+# the Claude session id; empty means any session's (see consult.sh).
 consult_active() {
-  [ -e "$BRAIN_CONSULT_LINK" ] || return 1
-  pgrep -f 'brain-ask ' >/dev/null 2>&1 && return 0
-  local now mtime
-  now="$(date +%s)"
-  mtime="$(file_mtime "$BRAIN_CONSULT_LINK")"
-  [ $((now - mtime)) -le 45 ]
+  consult_current_log "${1:-}" >/dev/null
 }
 
-# Latest reasoning-summary step from the `.thinking` sidecar, if any. Codex
+# Latest reasoning-summary step from a log's `.thinking` sidecar, if any. Codex
 # emits these as `**Bolded step**` headers, which read well as progress.
 consult_thinking_step() {
   local t step
-  t="$(abs_path "$BRAIN_CONSULT_LINK" 2>/dev/null || true).thinking"
+  t="$1.thinking"
   [ -f "$t" ] || return 0
-  step="$(grep -o '\*\*[^*]\+\*\*' "$t" 2>/dev/null | tail -1 | tr -d '*')"
+  step="$(tail -c 65536 "$t" 2>/dev/null | grep -oE '\*\*[^*]+\*\*' | tail -1 | tr -d '*')"
   [ ${#step} -le 64 ] || step="${step:0:61}..."
   printf '%s' "$step"
 }
 
-# One-line progress summary for the current consultation. Returns 1 when idle.
-# xhigh models emit no answer text for minutes, so that window reports the live
-# reasoning step instead — and falls back to a plain notice before one exists.
+# One-line progress summary for the session's current consultation. Returns 1
+# when idle. xhigh models emit no answer text for minutes, so that window
+# reports the live reasoning step instead, and falls back to a plain notice
+# before one exists.
 consult_progress_line() {
-  consult_active || return 1
-  local target name bytes heading step
-  target="$(basename "$(abs_path "$BRAIN_CONSULT_LINK")")"
-  name="${target%-*.log}"
-  bytes="$(file_size "$BRAIN_CONSULT_LINK")"
-  step="$(consult_thinking_step)"
+  local log name bytes heading step size
+  log="$(consult_current_log "${1:-}")" || return 1
+  name="$(basename "$log")"
+  name="${name%-*.log}"
+  bytes="$(file_size "$log" 2>/dev/null || echo 0)"
+  case "$bytes" in '' | *[!0-9]*) bytes=0 ;; esac
+  step="$(consult_thinking_step "$log")"
   if [ "$bytes" -eq 0 ]; then
     if [ -n "$step" ]; then
       printf '%s · thinking: %s\n' "$name" "$step"
@@ -411,8 +411,7 @@ consult_progress_line() {
     fi
     return 0
   fi
-  heading="$(grep -o '^#\+ .*' "$BRAIN_CONSULT_LINK" 2>/dev/null | tail -1 | sed 's/^#\+ *//')"
-  local size
+  heading="$(tail -c 65536 "$log" 2>/dev/null | grep -oE '^#+ .*' | tail -1 | sed -E 's/^#+ *//')"
   if [ "$bytes" -lt 1024 ]; then size="${bytes}B"; else size="$((bytes / 1024))kB"; fi
   printf '%s · %s%s\n' "$name" "$size" "${heading:+ · writing: $heading}"
 }
