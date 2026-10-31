@@ -104,6 +104,11 @@ Want a second opinion from another model mid-conversation? Just ask — e.g. *"h
 brain-grok double-check this"* or *"ask brain-sol to review this diff"*. Claude delegates
 to the router and brings the answer back.
 
+Codex can use the same router through the installed `brain-council` skill. Ask for a
+"brain council" to get independent model opinions in a Codex session. The skill uses
+`brain-ask`; Codex checks the claims and makes the final decision. The host installer
+links the skill into `CODEX_HOME/skills` or `~/.codex/skills` without replacing an existing skill.
+
 **Your brain manages itself.** From that same phone session you can just ask it to:
 - *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
 - *"link my Grok account"* (or Kimi, or Muse) — same: you tap the link and approve the code;
