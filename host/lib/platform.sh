@@ -97,6 +97,20 @@ file_size() {
   fi
 }
 
+# SHA-256 of stdin as lowercase hex. macOS ships shasum; Linux (Arch has no
+# perl shasum by default) ships sha256sum; openssl is the last resort.
+sha256_hex() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/^.*= *//' | cut -c1-64
+  else
+    return 1
+  fi
+}
+
 # Absolute, symlink-resolved path. Unlike `readlink -f`, tolerates a missing
 # final component (BSD readlink errors on that), and needs no GNU coreutils.
 abs_path() {
