@@ -15,8 +15,9 @@
 
 set -uo pipefail
 
-cat >/dev/null                                   # drain hook JSON on stdin
+INPUT="$(cat)"                                    # hook JSON on stdin
 command -v jq >/dev/null 2>&1 || exit 0
+SESSION="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)"
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # shellcheck source=../../lib/common.sh
@@ -42,7 +43,7 @@ if usage_advice_due "$u_state" 2>/dev/null; then
   fi
 fi
 
-line="$(consult_progress_line)" || line=""
+line="$(consult_progress_line "$SESSION")" || line=""
 
 # Nothing to say at all.
 if [ -z "$line" ] && [ -z "$usage_msg" ]; then
@@ -59,12 +60,14 @@ fi
 
 # Rate-limit: repeat an unchanged line at most once every 25s, so a burst of
 # tool calls during one silent thinking phase does not spam the transcript.
-stamp="$BRAIN_CONSULT_DIR/.last-progress"
+stamp="$BRAIN_CONSULT_DIR/.last-progress${SESSION:+-$SESSION}"
 now="$(date +%s)"
 if [ -f "$stamp" ]; then
   prev_line="$(sed -n '2,$p' "$stamp")"
   prev_at="$(sed -n '1p' "$stamp")"
-  if [ "$line" = "$prev_line" ] && [ $((now - ${prev_at:-0})) -lt 25 ]; then
+  case "$prev_at" in '' | *[!0-9]*) prev_at=0 ;; esac   # a corrupt stamp must not fail the hook
+  prev_at=$((10#$prev_at))                              # "08" is not octal here
+  if [ "$line" = "$prev_line" ] && [ $((now - prev_at)) -lt 25 ]; then
     exit 0
   fi
 fi
