@@ -4,6 +4,9 @@
 work. Anthropic, ChatGPT and Muse report genuine numbers; Grok and Kimi expose none, so never
 invent a figure for them.
 
+Sessions that brain did not launch are measured with their own login.
+`brain usage` names the login it measured.
+
 __ROUTING_STRATEGY__
 
 As Claude headroom falls, move implementation, review and bulk reading to `brain-*`

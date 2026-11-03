@@ -19,7 +19,7 @@ export BRAIN_CONFIG_DIR="$WORK/config"
 export BRAIN_AUTH_DIR="$WORK/auth"
 export HOME="$WORK/home"
 export BRAIN_ACCOUNT=default
-unset BRAIN_ACCOUNT_FLAG
+unset BRAIN_ACCOUNT_FLAG CLAUDE_CONFIG_DIR BRAIN_CLAUDE_CREDS BRAIN_CLAUDE_KEYCHAIN_SERVICE
 mkdir -p "$BRAIN_STATE_DIR" "$BRAIN_CONFIG_DIR" "$BRAIN_AUTH_DIR" "$HOME"
 
 # shellcheck source=../../host/lib/common.sh
@@ -501,6 +501,69 @@ check "same-file overlay is harmless"       '(ln -s "$BRAIN_SETTINGS_FILE" "$WOR
 setting_set ROUTING_CREDITS last
 check "invalid routing strategy rejected"   '! "$ROOT/host/bin/brain" config routing nonsense >/dev/null 2>&1'
 check "invalid routing credits rejected"    '! "$ROOT/host/bin/brain" config routing credits nonsense >/dev/null 2>&1'
+
+echo "== session login resolution =="
+check "external login has its own Claude sample and shared vendors" '(
+  unset BRAIN_CLAUDE_CREDS BRAIN_CLAUDE_KEYCHAIN_SERVICE
+  export CLAUDE_CONFIG_DIR="$HOME/Orca login/"
+  . "$ROOT/host/lib/common.sh"
+  login_hash="$(printf "%s" "$HOME/Orca login" | sha256_hex | cut -c1-8)"
+  [ "$BRAIN_CLAUDE_CREDS" = "$HOME/Orca login/.credentials.json" ] &&
+  [ "$CLAUDE_CONFIG_DIR" = "$HOME/Orca login" ] &&
+  [ "$BRAIN_SESSION_CLAUDE_DIR" = "$CLAUDE_CONFIG_DIR" ] &&
+  [ "$BRAIN_USAGE_SUMMARY" = "$BRAIN_USAGE_DIR/login-$login_hash/summary.txt" ] &&
+  [ "$BRAIN_USAGE_VENDORS" = "$BRAIN_USAGE_DIR/vendors.txt" ] &&
+  [ "$BRAIN_CODEX_STATE" = "$BRAIN_USAGE_DIR/codex.txt" ] &&
+  [ "$BRAIN_MUSE_STATE" = "$BRAIN_USAGE_DIR/muse.txt" ] &&
+  [ "$BRAIN_USAGE_OVERRIDE_FILE" = "$BRAIN_USAGE_DIR/OVERRIDE" ] &&
+  [ "$BRAIN_CLAUDE_KEYCHAIN_SERVICE" = "Claude Code-credentials-$login_hash" ]
+)'
+check "matching config dir keeps the account sample" '(
+  unset BRAIN_CLAUDE_CREDS BRAIN_CLAUDE_KEYCHAIN_SERVICE
+  export CLAUDE_CONFIG_DIR="$BRAIN_CLAUDE_DIR/"
+  . "$ROOT/host/lib/common.sh"
+  [ -z "$BRAIN_SESSION_CLAUDE_DIR" ] &&
+  [ "$BRAIN_CLAUDE_CREDS" = "$BRAIN_CLAUDE_DIR/.credentials.json" ] &&
+  [ "$BRAIN_USAGE_SUMMARY" = "$BRAIN_USAGE_DIR/summary.txt" ]
+)'
+check "explicit account ignores the session config dir" '(
+  unset BRAIN_CLAUDE_CREDS BRAIN_CLAUDE_KEYCHAIN_SERVICE
+  export BRAIN_ACCOUNT_FLAG=1 CLAUDE_CONFIG_DIR="$HOME/Orca login"
+  . "$ROOT/host/lib/common.sh"
+  [ -z "$BRAIN_SESSION_CLAUDE_DIR" ] &&
+  [ "$BRAIN_CLAUDE_CREDS" = "$BRAIN_CLAUDE_DIR/.credentials.json" ] &&
+  [ "$BRAIN_USAGE_SUMMARY" = "$BRAIN_USAGE_DIR/summary.txt" ]
+)'
+check "empty tokens report current reasons and fixes without changing the set sample" '(
+  export HOME="$WORK/login-home" BRAIN_CONFIG_DIR="$WORK/login-config" \
+    BRAIN_STATE_DIR="$WORK/login-state" BRAIN_DATA_DIR="$WORK/login-data"
+  export CLAUDE_CONFIG_DIR="$HOME/orca" BRAIN_ACCOUNT=work
+  export BRAIN_CLAUDE_KEYCHAIN_SERVICE=""
+  unset BRAIN_ACCOUNT_FLAG BRAIN_CLAUDE_CREDS BRAIN_USAGE_FIXTURE
+  . "$ROOT/host/lib/common.sh"
+  mkdir -p "$BRAIN_ACCOUNT_DIR" "$BRAIN_USAGE_DIR" "$BRAIN_USAGE_CLAUDE_STATE_DIR" \
+    "$CLAUDE_CONFIG_DIR" "$BRAIN_CLAUDE_DIR" "$WORK/login-bin"
+  printf "PORT=8320\n" > "$BRAIN_ACCOUNT_DIR/account"
+  printf "{\"claudeAiOauth\":{\"accessToken\":\"\"}}\n" > "$CLAUDE_CONFIG_DIR/.credentials.json"
+  printf "{\"claudeAiOauth\":{\"accessToken\":\"\"}}\n" > "$BRAIN_CLAUDE_DIR/.credentials.json"
+  printf "set sample must stay untouched\n" > "$BRAIN_USAGE_DIR/summary.txt"
+  cp "$BRAIN_USAGE_DIR/summary.txt" "$WORK/set-summary-before"
+  printf "updated_at=1 headroom=50\n" > "$BRAIN_USAGE_SUMMARY"
+  printf "1 old-reason\n" > "$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-error"
+  printf "#!/bin/sh\nexit 99\n" > "$WORK/login-bin/curl"
+  chmod +x "$WORK/login-bin/curl"
+  export PATH="$WORK/login-bin:$PATH"
+  "$ROOT/host/bin/brain" usage > "$WORK/session-usage.out" 2>&1 || exit 1
+  grep -q "headroom unknown (no-token)" "$WORK/session-usage.out" || exit 1
+  grep -q "sign in again in that session with /login" "$WORK/session-usage.out" || exit 1
+  grep -Fq "$CLAUDE_CONFIG_DIR (session login)" "$WORK/session-usage.out" || exit 1
+  [ "$(cat "$BRAIN_USAGE_DIR/summary.txt")" = "$(cat "$WORK/set-summary-before")" ] || exit 1
+  "$ROOT/host/bin/brain" usage --account work > "$WORK/set-usage.out" 2>&1 || exit 1
+  grep -q "headroom unknown (no-token)" "$WORK/set-usage.out" &&
+  grep -q "sign in again: brain auth anthropic --account work" "$WORK/set-usage.out" &&
+  grep -Fq "$BRAIN_CLAUDE_DIR (account set work)" "$WORK/set-usage.out" &&
+  [ "$(cat "$BRAIN_USAGE_DIR/summary.txt")" = "$(cat "$WORK/set-summary-before")" ]
+)'
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
