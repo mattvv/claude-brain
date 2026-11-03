@@ -43,7 +43,8 @@ All rules, with the reasons behind them:
 - Measured token routing (compression-capabilities H12/H13): response profiles cut output
   on every category with GPT-family consultants, but on grok, `--response
   review|implementation` needs `--effort low` too (~80% fewer output tokens, no coverage
-  loss) — grok's default reasoning burn dominates those categories otherwise.
+  loss, measured on grok-4.5 and not yet on 4.7) — grok's default reasoning burn
+  dominates those categories otherwise.
 - If a consultant reports its vendor isn't linked, tell the user the exact fix
   (`brain auth chatgpt|grok|kimi|muse`) and continue with the next fallback.
 - If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,
