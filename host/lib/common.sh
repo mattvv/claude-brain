@@ -87,6 +87,16 @@ else
   BRAIN_PROXY_PORT="${BRAIN_PROXY_PORT:-0}"
   BRAIN_ACCOUNT_TAG="-$BRAIN_ACCOUNT"
 fi
+BRAIN_SESSION_CLAUDE_DIR=""
+while [[ "${CLAUDE_CONFIG_DIR:-}" = */ ]]; do
+  CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR%/}"
+done
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -z "${BRAIN_ACCOUNT_FLAG:-}" ] \
+    && [ "$CLAUDE_CONFIG_DIR" != "$BRAIN_CLAUDE_DIR" ]; then
+  BRAIN_SESSION_CLAUDE_DIR="$CLAUDE_CONFIG_DIR"
+fi
+BRAIN_USAGE_CLAUDE_DIR="${BRAIN_SESSION_CLAUDE_DIR:-$BRAIN_CLAUDE_DIR}"
+
 BRAIN_ACCOUNT_SETTINGS_FILE="$BRAIN_ACCOUNT_DIR/settings"
 export BRAIN_TOKEN_FILE="$BRAIN_ACCOUNT_DIR/token"
 BRAIN_PROXY_CONFIG="$BRAIN_ACCOUNT_DIR/proxy-config.yaml"
@@ -449,20 +459,24 @@ claude_bin() {
 # it just to reach api.anthropic.com is a poor trade for ~40 lines of shell.
 
 BRAIN_USAGE_DIR="$BRAIN_ACCOUNT_STATE_DIR/usage"
-BRAIN_USAGE_SUMMARY="$BRAIN_USAGE_DIR/summary.txt"
+BRAIN_USAGE_CLAUDE_STATE_DIR="$BRAIN_USAGE_DIR"
+if [ -n "$BRAIN_SESSION_CLAUDE_DIR" ]; then
+  BRAIN_USAGE_CLAUDE_STATE_DIR="$BRAIN_USAGE_DIR/login-$(printf '%s' "$BRAIN_USAGE_CLAUDE_DIR" | sha256_hex | cut -c1-8)"
+fi
+BRAIN_USAGE_SUMMARY="$BRAIN_USAGE_CLAUDE_STATE_DIR/summary.txt"
 BRAIN_USAGE_VENDORS="$BRAIN_USAGE_DIR/vendors.txt"
-BRAIN_USAGE_STAMP="$BRAIN_USAGE_DIR/.last-fetch"
-BRAIN_USAGE_LOCK="$BRAIN_USAGE_DIR/.refresh.lock"
+BRAIN_USAGE_STAMP="$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-fetch"
+BRAIN_USAGE_LOCK="$BRAIN_USAGE_CLAUDE_STATE_DIR/.refresh.lock"
 BRAIN_USAGE_OVERRIDE_FILE="$BRAIN_USAGE_DIR/OVERRIDE"
-BRAIN_CLAUDE_CREDS="${BRAIN_CLAUDE_CREDS:-$BRAIN_CLAUDE_DIR/.credentials.json}"
+BRAIN_CLAUDE_CREDS="${BRAIN_CLAUDE_CREDS:-$BRAIN_USAGE_CLAUDE_DIR/.credentials.json}"
 # On macOS Claude Code keeps its login in the Keychain, not in .credentials.json.
 # A non-default config dir gets the first 8 hex of sha256(dir) appended.
 # Set to empty to skip the Keychain lookup.
 if [ -z "${BRAIN_CLAUDE_KEYCHAIN_SERVICE+set}" ]; then
-  if [ "$BRAIN_CLAUDE_DIR" = "$HOME/.claude" ]; then
+  if [ "$BRAIN_USAGE_CLAUDE_DIR" = "$HOME/.claude" ]; then
     BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials"
   else
-    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials-$(printf '%s' "$BRAIN_CLAUDE_DIR" | sha256_hex 2>/dev/null | cut -c1-8 || true)"
+    BRAIN_CLAUDE_KEYCHAIN_SERVICE="Claude Code-credentials-$(printf '%s' "$BRAIN_USAGE_CLAUDE_DIR" | sha256_hex 2>/dev/null | cut -c1-8 || true)"
   fi
 fi
 BRAIN_USAGE_ENDPOINT="${BRAIN_USAGE_ENDPOINT:-https://api.anthropic.com/api/oauth/usage}"
@@ -652,7 +666,7 @@ usage_claude_creds_json() {
 usage_refresh_anthropic() {
   local token expires creds now body_file code rc=0 fields reason=""
   now="$(date +%s)"
-  body_file="$BRAIN_USAGE_DIR/.body.$$"
+  body_file="$BRAIN_USAGE_CLAUDE_STATE_DIR/.body.$$"
   : > "$body_file" 2>/dev/null || true
 
   if [ -n "${BRAIN_USAGE_FIXTURE:-}" ]; then
@@ -688,7 +702,7 @@ usage_refresh_anthropic() {
 
   if [ -n "$reason" ]; then
     rm -f "$body_file"
-    printf '%s %s\n' "$now" "$reason" > "$BRAIN_USAGE_DIR/.last-error"
+    printf '%s %s\n' "$now" "$reason" > "$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-error"
     return 1
   fi
 
@@ -718,7 +732,7 @@ usage_refresh_anthropic() {
   printf 'updated_at=%s %scap=%s extra=%s on_credits=%s resets_in=%s\n' \
     "$now" "$fields" "$cap" "$extra" "$on_credits" "$resets_in" > "$tmp"
   mv "$tmp" "$BRAIN_USAGE_SUMMARY"
-  rm -f "$BRAIN_USAGE_DIR/.last-error"
+  rm -f "$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-error"
   printf '%s\n' "$now" > "$BRAIN_USAGE_STAMP"
   return 0
 }
@@ -750,8 +764,8 @@ usage_refresh_all() {
 # "someone else is already doing it" must mean "do nothing", not "do it again".
 usage_refresh() {
   ensure_brain_dirs
-  mkdir -p "$BRAIN_USAGE_DIR"
-  chmod 700 "$BRAIN_USAGE_DIR"
+  mkdir -p "$BRAIN_USAGE_DIR" "$BRAIN_USAGE_CLAUDE_STATE_DIR"
+  chmod 700 "$BRAIN_USAGE_DIR" "$BRAIN_USAGE_CLAUDE_STATE_DIR"
   command -v jq >/dev/null 2>&1 || return 1
   with_lock "$BRAIN_USAGE_LOCK" usage_refresh_all
 }
@@ -767,12 +781,14 @@ usage_ensure_fresh() {
   last="$(cat "$BRAIN_USAGE_STAMP" 2>/dev/null || echo 0)"
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   # Back off hard while the endpoint is failing, so a 404 becomes a trickle.
-  [ -f "$BRAIN_USAGE_DIR/.last-error" ] && ttl=$(( ttl * 20 ))
+  [ -f "$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-error" ] && ttl=$(( ttl * 20 ))
   [ $((now - last)) -ge "$ttl" ] || return 0
   local brain
   brain="$(command -v brain 2>/dev/null || printf '%s' "$HOME/.local/bin/brain")"
   [ -x "$brain" ] || return 0
-  run_detached "$brain" usage --refresh
+  run_detached env BRAIN_ACCOUNT="$BRAIN_ACCOUNT" BRAIN_ACCOUNT_FLAG="${BRAIN_ACCOUNT_FLAG:-}" \
+    CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-}" BRAIN_CLAUDE_CREDS="$BRAIN_CLAUDE_CREDS" \
+    BRAIN_CLAUDE_KEYCHAIN_SERVICE="$BRAIN_CLAUDE_KEYCHAIN_SERVICE" "$brain" usage --refresh
   return 0
 }
 
@@ -960,7 +976,7 @@ usage_advice_due() {
 
 # Reason the last refresh failed, if any. Empty when the last fetch succeeded.
 usage_last_error() {
-  cat "$BRAIN_USAGE_DIR/.last-error" 2>/dev/null | cut -d' ' -f2- || true
+  cat "$BRAIN_USAGE_CLAUDE_STATE_DIR/.last-error" 2>/dev/null | cut -d' ' -f2- || true
 }
 
 # ---- ChatGPT / Codex headroom ----

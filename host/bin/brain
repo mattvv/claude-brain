@@ -1223,13 +1223,14 @@ cmd_status() {
   done
   [ "$found" -eq 1 ] || warn "none yet — run: brain auth chatgpt|grok|kimi|muse"
 
-  local u_state
+  local u_state u_err
   u_state="$(usage_state 2>/dev/null || echo unknown)"
+  u_err="$(usage_last_error)"
   case "$u_state" in
     ok)       ok   "claude headroom $(usage_field headroom)% — routing unconstrained" ;;
     tight)    warn "claude headroom $(usage_field headroom)% on $(usage_field bind) — prefer consultants (brain usage)" ;;
     critical) fail "claude headroom $(usage_field headroom)% — at the $(usage_reserve_pct)% reserve; Anthropic-backed subagents blocked (brain usage)" ;;
-    *)        warn "claude headroom unknown${C_RESET} — usage guards fail open (brain usage)" ;;
+    *)        warn "claude headroom unknown${u_err:+ ($u_err)}${C_RESET} — usage guards fail open (brain usage)" ;;
   esac
 
   printf '%s\n' "${C_BOLD}claude & github${C_RESET}"
@@ -1954,11 +1955,18 @@ cmd_usage() {
       return 0
       ;;
     --json)
-      usage_ensure_fresh
       local st; st="$(usage_state)"
+      if [ "$st" = unknown ]; then
+        usage_refresh || true
+        st="$(usage_state)"
+      else
+        usage_ensure_fresh
+      fi
       jq -nc \
         --arg state "$st" \
         --arg enforce "$(usage_enforce)" \
+        --arg login_dir "$BRAIN_USAGE_CLAUDE_DIR" \
+        --arg login "$(if [ -n "$BRAIN_SESSION_CLAUDE_DIR" ]; then printf 'session login'; else printf 'account set %s' "$BRAIN_ACCOUNT"; fi)" \
         --arg bind "$(usage_field bind 2>/dev/null || echo '')" \
         --arg lanes "$(usage_rank_lanes 2>/dev/null || echo '')" \
         --arg err "$(usage_last_error)" \
@@ -1981,7 +1989,8 @@ cmd_usage() {
         --argjson mu_weekly "$(usage_muse_field weekly 2>/dev/null || echo null)" \
         '{state:$state, enforce:$enforce, override_active:$override,
           thresholds:{reserve:$reserve, advisory:$advisory},
-          anthropic:{headroom:$headroom, binding_window:$bind,
+          anthropic:{login_dir:$login_dir, login:$login,
+                     headroom:$headroom, binding_window:$bind,
                      windows:($windows | if . == "" then {} else
                                (split(",") | map(split(":")) | map({key:.[0], value:(.[1]|tonumber)}) | from_entries) end),
                      resets_in:$resets_in, updated_at:$updated_at, error:$err},
@@ -1997,16 +2006,29 @@ cmd_usage() {
   esac
 
   need jq
-  usage_ensure_fresh
-  # First run has nothing cached and the background spawn has not landed yet.
-  [ -f "$BRAIN_USAGE_SUMMARY" ] || usage_refresh
-
   local st err
   st="$(usage_state)"
+  if [ "$st" = unknown ]; then
+    usage_refresh || true
+    st="$(usage_state)"
+  else
+    usage_ensure_fresh
+  fi
+
   printf '%s\n' "${C_BOLD}claude subscription${C_RESET}"
+  printf '  login: %s (%s)\n' "$BRAIN_USAGE_CLAUDE_DIR" "$(if [ -n "$BRAIN_SESSION_CLAUDE_DIR" ]; then printf 'session login'; else printf 'account set %s' "$BRAIN_ACCOUNT"; fi)"
   if [ "$st" = "unknown" ]; then
     err="$(usage_last_error)"
     warn "headroom unknown${err:+ ($err)} — routing is unaffected; usage guards fail open"
+    case "$err" in
+      no-token|token-expired|http-401)
+        if [ -n "$BRAIN_SESSION_CLAUDE_DIR" ]; then
+          warn "sign in again in that session with /login"
+        else
+          warn "sign in again: brain auth anthropic$([ "$BRAIN_ACCOUNT" = default ] || printf ' --account %s' "$BRAIN_ACCOUNT")"
+        fi
+        ;;
+    esac
   else
     local bind entry w v
     bind="$(usage_field bind 2>/dev/null || true)"
