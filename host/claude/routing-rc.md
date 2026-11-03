@@ -31,10 +31,11 @@ All rules, with the reasons behind them:
   `xhigh` — handle it yourself or use `brain-luna --effort low`.
 - Escalate, don't spin: if you've failed twice on a hard problem, consult `brain-astra`
   at `xhigh` with full context rather than retrying the same approach.
-- `brain-astra` and `brain-luna` are GPT-6 and `brain-sol` is GPT-6.1; `brain-terra` is
-  still GPT-5.6 (GPT-6 has no terra). They share one ChatGPT account, so the vendor guard
-  cannot tell you a model is missing. `brain-sol` and `brain-luna` fall back to GPT-5.6 on
-  their own, so keep routing to them as usual. If `brain-astra` reports `unknown provider
+- `brain-astra` and `brain-luna` are GPT-6; `brain-sol` and `brain-terra` are GPT-6.1.
+  They share one ChatGPT account, so the vendor guard cannot tell you a model is missing.
+  `brain-sol`, `brain-terra` and `brain-luna` fall back to GPT-5.6 on their own, and
+  `brain-grok` (Grok 4.7) and `brain-kimi` (K3.1 Pro) fall back to Grok 4.5 and K3, so
+  keep routing to them as usual. If `brain-astra` reports `unknown provider
   for model gpt-6-astra`, that account does not serve GPT-6 yet — fall through to
   `brain-sol` and tell the user once. Do not retry or guess another model id.
 - Cross-family verification beats same-family repetition: for high-stakes review, prefer
@@ -42,7 +43,8 @@ All rules, with the reasons behind them:
 - Measured token routing (compression-capabilities H12/H13): response profiles cut output
   on every category with GPT-family consultants, but on grok, `--response
   review|implementation` needs `--effort low` too (~80% fewer output tokens, no coverage
-  loss) — grok's default reasoning burn dominates those categories otherwise.
+  loss, measured on grok-4.5 and not yet on 4.7) — grok's default reasoning burn
+  dominates those categories otherwise.
 - If a consultant reports its vendor isn't linked, tell the user the exact fix
   (`brain auth chatgpt|grok|kimi|muse`) and continue with the next fallback.
 - If a consultant's report starts with "NEEDS INPUT:", relay its questions to the user,
