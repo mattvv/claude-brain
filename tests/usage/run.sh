@@ -557,12 +557,12 @@ check "empty tokens report current reasons and fixes without changing the set sa
   grep -q "headroom unknown (no-token)" "$WORK/session-usage.out" || exit 1
   grep -q "sign in again in that session with /login" "$WORK/session-usage.out" || exit 1
   grep -Fq "$CLAUDE_CONFIG_DIR (session login)" "$WORK/session-usage.out" || exit 1
-  cmp -s "$BRAIN_USAGE_DIR/summary.txt" "$WORK/set-summary-before" || exit 1
+  [ "$(cat "$BRAIN_USAGE_DIR/summary.txt")" = "$(cat "$WORK/set-summary-before")" ] || exit 1
   "$ROOT/host/bin/brain" usage --account work > "$WORK/set-usage.out" 2>&1 || exit 1
   grep -q "headroom unknown (no-token)" "$WORK/set-usage.out" &&
   grep -q "sign in again: brain auth anthropic --account work" "$WORK/set-usage.out" &&
   grep -Fq "$BRAIN_CLAUDE_DIR (account set work)" "$WORK/set-usage.out" &&
-  cmp -s "$BRAIN_USAGE_DIR/summary.txt" "$WORK/set-summary-before"
+  [ "$(cat "$BRAIN_USAGE_DIR/summary.txt")" = "$(cat "$WORK/set-summary-before")" ]
 )'
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
