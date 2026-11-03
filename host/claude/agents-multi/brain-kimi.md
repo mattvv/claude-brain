@@ -1,7 +1,7 @@
 ---
 name: brain-kimi
 description: "Huge-context digestion and summarization; long logs and whole-directory reads (1M-token window)."
-model: "kimi-k3"
+model: "kimi-k3.1-pro"
 effort: "high"
 ---
 <!-- claude-brain multi-lane agent. Native model routing via the proxy; use only in 'brain multi' sessions. -->

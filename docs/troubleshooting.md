@@ -46,7 +46,7 @@ brain-proxy-build --force
 ## A bridge agent (brain-grok etc.) says it can't reach the model
 
 - `brain status` — is that vendor listed under "linked accounts"? If not: `brain auth <vendor>`.
-- Test the router directly: `brain-ask grok-4.5 "say hi"`. The error it prints
+- Test the router directly: `brain-ask grok-4.7 "say hi"`. The error it prints
   (HTTP 401 = token problem, connection refused = router down) tells you which fix above applies.
 
 ## ChatGPT keeps saying "enable device code authorization"

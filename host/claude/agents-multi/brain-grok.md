@@ -1,7 +1,7 @@
 ---
 name: brain-grok
 description: "Bounded terminal-heavy or systems implementation, especially Rust or C++, plus cross-family smoke testing."
-model: "grok-4.5"
+model: "grok-4.7"
 effort: "high"
 ---
 <!-- claude-brain multi-lane agent. Native model routing via the proxy; use only in 'brain multi' sessions. -->

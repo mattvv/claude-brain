@@ -1,7 +1,7 @@
 ---
 name: brain-terra
 description: "React and frontend implementation, visual UI work, or a tightly scoped code fix."
-model: "gpt-5.6-terra"
+model: "gpt-6.1-terra"
 effort: "xhigh"
 ---
 <!-- claude-brain multi-lane agent. Native model routing via the proxy; use only in 'brain multi' sessions. -->
