@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Run an explicitly named Cursor model in read-only Ask mode.
+set -euo pipefail
+
+MODEL="${1#cursor:}"
+[ -n "$MODEL" ] || { echo 'usage: brain-ask cursor:<model> [--context-file PATH] [prompt|-]' >&2; exit 2; }
+shift
+
+PROMPT="" SYSTEM_FILE="" RESPONSE=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --context-file)
+      [ "$#" -ge 2 ] && [ -f "$2" ] || { echo 'context file not found' >&2; exit 2; }
+      PROMPT="${PROMPT}${PROMPT:+$'\n\n'}Context file: $2
+$(cat "$2")"
+      shift 2 ;;
+    --context-range)
+      [ "$#" -ge 2 ] || { echo 'missing context range' >&2; exit 2; }
+      RANGE_PATH="${2%@*}"
+      RANGE_SPEC="${2##*@}"
+      START_LINE="${RANGE_SPEC%%:*}"
+      END_LINE="${RANGE_SPEC##*:}"
+      [[ "$START_LINE" =~ ^[0-9]+$ && "$END_LINE" =~ ^[0-9]+$ ]] \
+        && [ "$START_LINE" -ge 1 ] && [ "$END_LINE" -ge "$START_LINE" ] \
+        && [ -f "$RANGE_PATH" ] || { echo 'invalid context range' >&2; exit 2; }
+      PROMPT="${PROMPT}${PROMPT:+$'\n\n'}Context range: $2
+$(sed -n "${START_LINE},${END_LINE}p" "$RANGE_PATH")"
+      shift 2 ;;
+    --system)
+      [ "$#" -ge 2 ] && [ -f "$2" ] || { echo 'system file not found' >&2; exit 2; }
+      SYSTEM_FILE="$2"; shift 2 ;;
+    --response)
+      [ "$#" -ge 2 ] || { echo 'missing response profile' >&2; exit 2; }
+      RESPONSE="$2"; shift 2 ;;
+    -)
+      PROMPT="${PROMPT}${PROMPT:+$'\n\n'}$(cat)"; shift ;;
+    --*)
+      echo "unsupported Cursor option: $1" >&2; exit 2 ;;
+    *)
+      PROMPT="${PROMPT}${PROMPT:+$'\n\n'}$1"; shift ;;
+  esac
+done
+
+[ -z "$SYSTEM_FILE" ] || PROMPT="$(cat "$SYSTEM_FILE")"$'\n\n'"$PROMPT"
+[ -z "$RESPONSE" ] || PROMPT="Response profile: $RESPONSE"$'\n\n'"$PROMPT"
+[ -n "$PROMPT" ] || { echo 'empty prompt' >&2; exit 2; }
+command -v cursor-agent >/dev/null 2>&1 || { echo 'cursor-agent is not installed' >&2; exit 1; }
+cursor-agent -p --mode ask --trust --output-format text --model "$MODEL" "$PROMPT"

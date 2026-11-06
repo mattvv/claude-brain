@@ -109,6 +109,14 @@ Codex can use the same router through the installed `brain-council` skill. Ask f
 `brain-ask`; Codex checks the claims and makes the final decision. The host installer
 links the skill into `CODEX_HOME/skills` or `~/.codex/skills` without replacing an existing skill.
 
+`brain-ask cursor:<model>` runs a model available in Cursor Agent's read-only Ask mode.
+Install `cursor-agent`, run `cursor-agent login`, and use `cursor-agent --list-models` to get
+the exact model ID. For example, run
+`brain-ask cursor:<model-id> --context-file diff.txt 'Review this change'`.
+This route uses Cursor's login and billing. It does not use the
+local OAuth router. It accepts `--context-file`, `--context-range`, `--system`, and
+`--response`; proxy-only options such as `--stream` and `--max-tokens` are not supported.
+
 **Your brain manages itself.** From that same phone session you can just ask it to:
 - *"link my ChatGPT account"* — it starts the login and sends you the URL and code to tap;
 - *"link my Grok account"* (or Kimi, or Muse) — same: you tap the link and approve the code;

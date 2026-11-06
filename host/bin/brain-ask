@@ -32,6 +32,11 @@ fi
 # execs below keep, so status surfaces can tell a live run from a mention.
 consult_register_owner "${1:-}"
 
+# Cursor models run through Cursor Agent, not the OAuth proxy.
+case "${1:-}" in
+  cursor:*) exec "$DIR/../libexec/brain-cursor-ask" "$@" ;;
+esac
+
 if [ -z "${BRAIN_ASK_LEGACY:-}" ] && [ -x "$NATIVE" ]; then
   # argv[0]=brain-ask so consult.sh can confirm the owner pid is this run.
   exec -a brain-ask "$NATIVE" "$@"
